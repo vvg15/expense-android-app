@@ -1,0 +1,78 @@
+plugins {
+    id 'com.android.application'
+}
+
+// ── Version: single source of truth is web/version.js ──────────────────────
+// versionName = "X.Y.Z"; versionCode = X*10000 + Y*100 + Z (must always go up
+// for Google Play to accept an update). Run `python3 bump_version.py X.Y.Z`.
+def versionMatch = (file('../web/version.js').text =~ /APP_VERSION\s*=\s*'(\d+)\.(\d+)\.(\d+)'/)
+if (!versionMatch.find()) throw new GradleException('Could not read APP_VERSION from web/version.js')
+def vMajor = versionMatch.group(1) as int
+def vMinor = versionMatch.group(2) as int
+def vPatch = versionMatch.group(3) as int
+if (vMinor > 99 || vPatch > 99) throw new GradleException('Minor and patch versions must be 0-99')
+
+android {
+    // namespace = Java package of the code (internal, may differ from the app id).
+    namespace 'com.expensemanager.app'
+    compileSdk 36
+
+    defaultConfig {
+        // PERMANENT app id (Google Play + installed phones). Never change it.
+        applicationId 'in.vvg.expenses'
+        minSdk 24
+        targetSdk 36
+        versionCode vMajor * 10000 + vMinor * 100 + vPatch
+        versionName "${vMajor}.${vMinor}.${vPatch}"
+    }
+
+    signingConfigs {
+        release {
+            // Supplied by GitHub Actions secrets (see README). Never commit the key.
+            def ks = System.getenv('KEYSTORE_FILE')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias System.getenv('KEY_ALIAS')
+                keyPassword System.getenv('KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // The app's screens are the web app in ../web, packaged inside the APK.
+    sourceSets {
+        main {
+            assets.srcDirs = ['../web']
+        }
+    }
+    androidResources {
+        // Files only needed for the web (PWA) version.
+        ignoreAssetsPattern '!sw.js:!manifest.webmanifest:!*.md:!*.py:!.*'
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.16.0'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'com.google.android.play:app-update:2.1.0'
+}
