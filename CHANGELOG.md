@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.1 — 19 Nov 2026
+- Fixed: category names in Settings were squeezed into tiny boxes.
+- App lock is now near the top of Settings and always shown in the Android app; if it can't start, it shows the reason instead of hiding. Same for Automatic backup. About shows the native bridge version.
+
 ## 2.1.0 — 19 Nov 2026 · data format v2 (automatic upgrade)
 **Home**
 - Daily spending now comes first; tap it to open the new **Spending trends** screen.

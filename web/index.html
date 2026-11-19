@@ -98,6 +98,15 @@
       </div>
     </section>
 
+    <section class="panel" id="lockPanel" hidden>
+      <h2>App lock</h2>
+      <p class="small" id="lockLine" style="margin:0"></p>
+      <label class="check" style="margin-top:12px"><input type="checkbox" id="lockToggle"> <span>Require fingerprint or screen lock to open the app</span></label>
+      <div class="row2 form" id="lockDelayWrap" style="margin-top:12px">
+        <label>Lock again after<select id="lockDelay"><option value="0">Immediately</option><option value="60">1 minute away</option><option value="300">5 minutes away</option><option value="1800">30 minutes away</option></select></label>
+      </div>
+    </section>
+
     <section class="panel">
       <h2>Categories</h2>
       <div class="cat-edit" id="sCats"></div>
@@ -152,14 +161,6 @@
       <label class="check" style="margin-top:14px"><input type="checkbox" id="backupRemind"> <span>Remind me when I haven’t backed up for a month</span></label>
     </section>
 
-    <section class="panel" id="lockPanel" hidden>
-      <h2>App lock</h2>
-      <p class="small" id="lockLine" style="margin:0"></p>
-      <label class="check" style="margin-top:12px"><input type="checkbox" id="lockToggle"> <span>Require fingerprint or screen lock to open the app</span></label>
-      <div class="row2 form" id="lockDelayWrap" style="margin-top:12px">
-        <label>Lock again after<select id="lockDelay"><option value="0">Immediately</option><option value="60">1 minute away</option><option value="300">5 minutes away</option><option value="1800">30 minutes away</option></select></label>
-      </div>
-    </section>
 
     <section class="panel">
       <h2>Storage</h2>

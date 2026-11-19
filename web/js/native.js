@@ -47,7 +47,11 @@ export const native = {
 
   // ── App lock (bridge v2) ──
   /** { available, enabled, delay } — available = the phone has a screen lock set up. */
-  lockState() { try { return has('lockState') ? JSON.parse(B.lockState()) : null; } catch { return null; } },
+  lockState() {
+    if (!has('lockState')) return { error: 'not available in this app version' };
+    try { return JSON.parse(B.lockState()); } catch (e) { return { error: String((e && e.message) || e) }; }
+  },
+  bridgeVersion: () => { try { return has('bridgeVersion') ? B.bridgeVersion() : 1; } catch { return 0; } },
   /** Asks for fingerprint/screen lock, then turns the lock on or off. Resolves with the new state. */
   async setLock(enabled) { const p = once('lockChanged'); B.setLock(!!enabled); return p; },
   setLockDelay: (sec) => has('setLockDelay') && B.setLockDelay(sec | 0),

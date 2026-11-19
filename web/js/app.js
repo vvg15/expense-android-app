@@ -505,7 +505,8 @@ function renderSettings() {
 
   $('sCats').innerHTML = state.settings.categories.map((c, i) => `<span class="cat-pill ${c.excluded ? 'excl' : ''}"><button type="button" class="cat-pill-name" data-edit-cat="${i}"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}${c.excluded ? ' <small>not counted</small>' : ''}</button><button type="button" data-remove-cat="${i}" aria-label="Remove ${esc(c.name)}">×</button></span>`).join('');
   $('backupRemind').checked = state.meta.backupReminders !== false;
-  renderAutoBackup(); renderLock();
+  try { renderAutoBackup(); } catch (e) { console.error(e); $('autoBackupLine').textContent = 'Automatic backup error: ' + e.message; }
+  try { renderLock(); } catch (e) { console.error(e); $('lockPanel').hidden = false; $('lockLine').textContent = 'App lock error: ' + e.message; }
 
   const d = daysSince(state.meta.lastBackupAt);
   $('backupInfo').textContent = d === Infinity ? 'No backup made from this phone yet.' : `Last backup: ${new Date(state.meta.lastBackupAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}${d > 0 ? ` (${d} day${d === 1 ? '' : 's'} ago)` : ''}.`;
@@ -523,7 +524,7 @@ function renderSettings() {
       $('persistInfo') && ($('persistInfo').textContent = (p ? 'Protected from automatic clean-up' : 'Install the app to protect data from automatic clean-up') + used + '.');
     } catch {}
   })();
-  $('aboutInfo').innerHTML = `Expense Manager <b>v${esc(APP_VERSION)}</b>${isNative ? ' for Android' : ''} · data format v${SCHEMA_VERSION}<br><span class="muted">${isNative ? 'Works offline and has no internet access. Nothing leaves your phone unless you export it.' : 'Works offline. Nothing leaves your phone unless you export it.'}</span>`;
+  $('aboutInfo').innerHTML = `Expense Manager <b>v${esc(APP_VERSION)}</b>${isNative ? ` for Android (bridge v${native.bridgeVersion()})` : ''} · data format v${SCHEMA_VERSION}<br><span class="muted">${isNative ? 'Works offline and has no internet access. Nothing leaves your phone unless you export it.' : 'Works offline. Nothing leaves your phone unless you export it.'}</span>`;
 }
 
 // ─── Expense sheet ───────────────────────────────────────────────────────────
@@ -1351,8 +1352,14 @@ async function runAutoBackup(force = false) {
 }
 function renderAutoBackup() {
   const box = $('autoBackupBox');
-  box.hidden = !(isNative && native.canAutoBackup());
-  if (box.hidden) return;
+  box.hidden = !isNative;
+  if (!isNative) return;
+  if (!native.canAutoBackup()) {
+    $('autoBackupLine').textContent = 'Automatic backup isn’t available in this app version.';
+    ['autoBackupFreqWrap', 'autoBackupPick', 'autoBackupNow', 'autoBackupOff'].forEach((id) => ($(id).hidden = true));
+    return;
+  }
+  $('autoBackupPick').hidden = false;
   const ab = abState();
   const folder = ab.on ? native.backupFolderName() : '';
   const on = ab.on && !!folder;
@@ -1388,9 +1395,14 @@ $('backupRemind').addEventListener('change', (e) => setMeta({ backupReminders: e
 
 // ─── App lock (Android) ───────────────────────────────────────────────────────
 function renderLock() {
-  const ls = isNative ? native.lockState() : null;
-  $('lockPanel').hidden = !ls;
-  if (!ls) return;
+  $('lockPanel').hidden = !isNative;
+  if (!isNative) return;
+  const ls = native.lockState() || { error: 'no response' };
+  if (ls.error) {
+    $('lockLine').innerHTML = `App lock couldn’t start (${esc(ls.error)}). Please send a screenshot of this to whoever maintains the app.`;
+    $('lockToggle').disabled = true; $('lockDelayWrap').hidden = true;
+    return;
+  }
   $('lockLine').innerHTML = ls.available
     ? 'Protect your expenses with your fingerprint, face or your phone’s PIN/pattern.'
     : 'Set up a screen lock (PIN, pattern or fingerprint) in your phone’s settings first. Then you can lock this app.';

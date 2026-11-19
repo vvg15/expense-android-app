@@ -3,7 +3,7 @@
 // Phones only notice an update when THIS file's bytes change, so the release
 // version is written here as well as in version.js. Use `python3 bump_version.py X.Y.Z`
 // to change both at once.
-const RELEASE = '2.1.0';
+const RELEASE = '2.1.1';
 
 importScripts('version.js');
 if (self.APP_VERSION !== RELEASE) console.warn(`Version mismatch: sw.js=${RELEASE}, version.js=${self.APP_VERSION}`);
