@@ -81,6 +81,7 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileCallback;
     private String pendingSaveContent;
     private SharedPreferences prefs;
+    private FrameLayout rootView;
     private boolean smsDeclared;
     Updater updater;
 
@@ -101,6 +102,7 @@ public class MainActivity extends Activity {
 
         int bg = isDarkMode() ? Color.parseColor("#121412") : Color.parseColor("#F5F4EF");
         FrameLayout root = new FrameLayout(this);
+        rootView = root;
         root.setBackgroundColor(bg);
         web = new WebView(this);
         web.setBackgroundColor(bg);
@@ -149,9 +151,41 @@ public class MainActivity extends Activity {
         // Below Android 11 the theme colours the bars and the window resizes for the keyboard.
     }
 
+    /** Dark if the user chose Dark in the app, or chose System and the phone is in dark mode. */
     private boolean isDarkMode() {
+        String t = prefs != null ? prefs.getString("theme", "system") : "system";
+        if ("dark".equals(t)) return true;
+        if ("light".equals(t)) return false;
         return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
                 == Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    /** Called by the page (Settings → Appearance): match the system bars to the app's theme. */
+    void applyTheme(String mode) {
+        String m = "dark".equals(mode) || "light".equals(mode) ? mode : "system";
+        prefs.edit().putString("theme", m).apply();
+        boolean dark = isDarkMode();
+        int bg = dark ? Color.parseColor("#121412") : Color.parseColor("#F5F4EF");
+        if (rootView != null) rootView.setBackgroundColor(bg);
+        if (web != null) web.setBackgroundColor(bg);
+        if (lockOverlay != null) lockOverlay.setBackgroundColor(bg);
+        Window w = getWindow();
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = w.getInsetsController();
+            if (c != null) {
+                int light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                c.setSystemBarsAppearance(dark ? 0 : light, light);
+            }
+        } else {
+            w.setStatusBarColor(bg);
+            w.setNavigationBarColor(bg);
+            View d = w.getDecorView();
+            int f = d.getSystemUiVisibility();
+            int lightFlags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    | (Build.VERSION.SDK_INT >= 26 ? View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0);
+            d.setSystemUiVisibility(dark ? (f & ~lightFlags) : (f | lightFlags));
+        }
     }
 
     private void setUpWebView() {

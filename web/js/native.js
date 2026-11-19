@@ -51,6 +51,8 @@ export const native = {
     if (!has('lockState')) return { error: 'not available in this app version' };
     try { return JSON.parse(B.lockState()); } catch (e) { return { error: String((e && e.message) || e) }; }
   },
+  // ── Appearance (bridge v3): colours the status / navigation bars to match the chosen theme ──
+  setTheme: (mode) => has('setTheme') && B.setTheme(String(mode)),
   bridgeVersion: () => { try { return has('bridgeVersion') ? B.bridgeVersion() : 1; } catch { return 0; } },
   /** Asks for fingerprint/screen lock, then turns the lock on or off. Resolves with the new state. */
   async setLock(enabled) { const p = once('lockChanged'); B.setLock(!!enabled); return p; },

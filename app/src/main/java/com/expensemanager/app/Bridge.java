@@ -19,7 +19,13 @@ final class Bridge {
     /** Version of the bridge API (not the app). Bump when adding methods. */
     @JavascriptInterface
     public int bridgeVersion() {
-        return 2;
+        return 3;
+    }
+
+    /** "system" | "light" | "dark" — chosen in Settings → Appearance (bridge v3). */
+    @JavascriptInterface
+    public void setTheme(String mode) {
+        a.runOnUiThread(() -> a.applyTheme(mode));
     }
 
     @JavascriptInterface

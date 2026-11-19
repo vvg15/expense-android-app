@@ -7,7 +7,7 @@ const MIN_BAR = { day: 14, week: 34, month: 46 }; // px per bucket at zoom 1
 const H = 240, PAD_T = 14, PAD_B = 26;
 
 /**
- * api: { state, money, catColor, isExcluded, sum, txHtml }
+ * api: { state, money, catColor, isExcluded, sum, txHtml, amt (net amount of an expense), catIcon }
  * Returns { open(fromMonth), render() }.
  */
 export function createTrends(api) {
@@ -108,7 +108,7 @@ export function createTrends(api) {
     for (const e of sorted) {
       while (i < bks.length && e.date > bks[i].end) i++;
       if (i >= bks.length) break;
-      if (e.date >= bks[i].start) { bks[i].items.push(e); bks[i].total += Number(e.amount) || 0; }
+      if (e.date >= bks[i].start) { bks[i].items.push(e); bks[i].total += api.amt(e); }
     }
     return bks;
   }
@@ -269,18 +269,18 @@ export function createTrends(api) {
     const el = $('trDetail');
     if (t.selected !== null && bks[t.selected]) {
       const b = bks[t.selected];
-      const items = b.items.slice().sort((a, c) => c.date.localeCompare(a.date) || c.amount - a.amount);
+      const items = b.items.slice().sort((a, c) => c.date.localeCompare(a.date) || api.amt(c) - api.amt(a));
       el.innerHTML = `<div class="panel-head"><h2>${esc(bucketLabel(b, group))}</h2><span class="num"><b>${api.money(b.total)}</b> <button class="linkish" id="trClearSel" style="margin-left:8px">Close</button></span></div>`
         + (items.length ? items.map(api.txHtml).join('') : '<div class="empty">No spending.</div>');
       return;
     }
     // No bar selected: where the money went in this period.
     const by = {};
-    list.forEach((e) => (by[e.category] = (by[e.category] || 0) + Number(e.amount)));
+    list.forEach((e) => (by[e.category] = (by[e.category] || 0) + api.amt(e)));
     const rows = Object.entries(by).sort((a, b) => b[1] - a[1]);
     const total = api.sum(list), max = rows.length ? rows[0][1] : 1;
     el.innerHTML = `<div class="panel-head"><h2>Where it went</h2><span class="muted small">Tap a bar for that ${group}’s expenses</span></div>`
-      + (rows.length ? rows.map(([c, a]) => `<div class="cat-row static"><span class="cat-name"><span class="dot" style="background:${api.catColor(c)}"></span>${esc(c)}</span><span class="cat-amt num">${api.money(a)}<small>${Math.round((a / total) * 100)}%</small></span><span class="bar"><span style="width:${(a / max) * 100}%;background:${api.catColor(c)}"></span></span></div>`).join('') : '<div class="empty">No spending in this period.</div>');
+      + (rows.length ? rows.map(([c, a]) => `<div class="cat-row static"><span class="cat-name">${api.catIcon ? api.catIcon(c, 'sm') : `<span class="dot" style="background:${api.catColor(c)}"></span>`}${esc(c)}</span><span class="cat-amt num">${api.money(a)}<small>${Math.round((a / total) * 100)}%</small></span><span class="bar"><span style="width:${(a / max) * 100}%;background:${api.catColor(c)}"></span></span></div>`).join('') : '<div class="empty">No spending in this period.</div>');
   }
 
   // ── Events ──
@@ -352,7 +352,7 @@ export function createTrends(api) {
       if (Math.abs(dx) > 60 && Math.abs(dy) < 50) shift(dx < 0 ? 1 : -1);
     }, { passive: true });
   });
-  window.addEventListener('resize', () => { if (!$('view-trends').hidden) render(); });
+  window.addEventListener('resize', () => { if (!$('view-insights').hidden) render(); });
 
   return {
     /** Open on a given month (from the Home screen). */

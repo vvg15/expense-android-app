@@ -10,6 +10,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<script>try{var t=localStorage.getItem('em.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}catch(e){}</script>
 <link rel="stylesheet" href="css/styles.css">
 <script src="version.js"></script>
 <script type="module" src="js/app.js"></script>
@@ -23,18 +24,21 @@
 <div class="app">
   <!-- ───────── Home ───────── -->
   <section id="view-home" class="view">
-    <header class="top">
-      <div class="brand">
-        <div class="logo" id="logo">₹</div>
-        <h1>Expenses</h1>
+    <header class="top home-top">
+      <button class="month-label" id="monthLabel" aria-label="Choose month"></button>
+      <div class="top-actions">
+        <button class="icon-btn round" id="prevMonth" aria-label="Previous month"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+        <button class="icon-btn round" id="nextMonth" aria-label="Next month"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+        <a class="icon-btn round" href="#search" aria-label="Search all expenses"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4"/></svg></a>
+        <button class="btn primary desktop-only" data-action="add">+ Add expense</button>
       </div>
-      <button class="btn primary desktop-only" data-action="add">+ Add expense</button>
     </header>
 
     <div id="backupNudge" class="notice" hidden></div>
+    <button id="smsReview" class="review-strip" hidden></button>
 
     <div id="smsIntro" class="panel intro-card" hidden>
-      <div class="intro-icon" aria-hidden="true">✉</div>
+      <div class="intro-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg></div>
       <div class="intro-text">
         <b>Add expenses from your bank SMS</b>
         <p class="small muted">The app can spot payments in your bank, card and UPI messages and ask you before adding them. Optional, and everything stays on your phone.</p>
@@ -42,34 +46,26 @@
       </div>
     </div>
 
-    <nav class="monthbar" aria-label="Month">
-      <button class="icon-btn" id="prevMonth" aria-label="Previous month">‹</button>
-      <button class="month-label" id="monthLabel" aria-label="Choose month"></button>
-      <button class="icon-btn" id="nextMonth" aria-label="Next month">›</button>
-      <button class="btn ghost sm" id="thisMonth" hidden>This month</button>
-    </nav>
-
-    <section class="cards" id="cards"></section>
+    <section class="hero" id="hero"></section>
+    <section class="mini-stats" id="miniStats"></section>
 
     <section class="grid2">
-      <div class="panel daily-panel" id="dailyPanel" role="button" tabindex="0" aria-label="Open spending trends">
-        <div class="panel-head"><h2>Daily spending</h2><span class="muted small"><span id="dailyHint"></span> <span class="open-link">Open ›</span></span></div>
-        <div id="dailyChart"></div>
-      </div>
       <div class="panel">
-        <div class="panel-head"><h2>By category</h2><span class="muted small">Tap to filter</span></div>
+        <div class="panel-head"><h2>Where it went</h2><a class="linkish small" href="#insights">Insights</a></div>
         <div id="catBreakdown"></div>
+      </div>
+      <div class="panel daily-panel" id="dailyPanel" role="button" tabindex="0" aria-label="Open spending trends">
+        <div class="panel-head"><h2>Daily spending</h2><span class="muted small"><span id="dailyHint"></span> <span class="open-link">Trends ›</span></span></div>
+        <div id="dailyChart"></div>
       </div>
     </section>
 
-    <section class="panel">
-      <div class="panel-head wrap">
+    <section class="panel tx-panel">
+      <div class="panel-head">
         <h2>Transactions</h2>
-        <div class="filters">
-          <input type="search" id="search" placeholder="Search…" aria-label="Search">
-          <select id="catFilter" aria-label="Filter by category"></select>
-        </div>
+        <a class="linkish small" href="#search">Search all months</a>
       </div>
+      <div id="catFilterBar"></div>
       <div id="txList"></div>
     </section>
   </section>
@@ -88,18 +84,26 @@
 
   <!-- ───────── Settings ───────── -->
   <section id="view-settings" class="view" hidden>
-    <header class="top"><div class="brand"><h1>Settings</h1></div></header>
+    <header class="top"><div class="brand"><a href="#settings" class="icon-btn back" id="setBack" aria-label="Back to settings" hidden>‹</a><h1 id="setTitle">Settings</h1></div></header>
+    <div id="setIndex"></div>
 
-    <section class="panel">
-      <h2>General</h2>
+    <section class="panel" data-sec="general">
       <div class="row2 form">
         <label>Currency<select id="sCurrency"></select></label>
         <label>Monthly budget<input id="sBudget" inputmode="decimal" placeholder="No budget" autocomplete="off"></label>
       </div>
+      <div class="field-label" style="margin-top:16px">Appearance</div>
+      <div class="seg sm" id="themeSeg" style="margin:0"><button data-theme-set="system">System</button><button data-theme-set="light">Light</button><button data-theme-set="dark">Dark</button></div>
     </section>
 
-    <section class="panel" id="lockPanel" hidden>
-      <h2>App lock</h2>
+    <section class="panel" data-sec="catbudgets">
+      <p class="muted small" style="margin:0 0 12px">Set a monthly limit for the categories you want to keep an eye on. Leave the rest empty.</p>
+      <div id="cbList"></div>
+      <p class="small" id="cbSummary" style="margin:12px 0 0"></p>
+      <label class="check" style="margin-top:14px"><input type="checkbox" id="cbAlerts"> <span>Warn me at 80% and when a budget is used up<br><span class="muted small">Also for the monthly budget.</span></span></label>
+    </section>
+
+    <section class="panel" id="lockPanel" data-sec="lock" hidden>
       <p class="small" id="lockLine" style="margin:0"></p>
       <label class="check" style="margin-top:12px"><input type="checkbox" id="lockToggle"> <span>Require fingerprint or screen lock to open the app</span></label>
       <div class="row2 form" id="lockDelayWrap" style="margin-top:12px">
@@ -107,8 +111,7 @@
       </div>
     </section>
 
-    <section class="panel">
-      <h2>Categories</h2>
+    <section class="panel" data-sec="categories">
       <div class="cat-edit" id="sCats"></div>
       <form class="add-row" id="addCatForm">
         <input id="sNewCat" maxlength="30" placeholder="New category" autocomplete="off">
@@ -117,8 +120,7 @@
       <p class="muted small hint">Tap a category to choose whether it counts as spending. Transfers and Investments don’t count by default. Removing a category keeps past expenses; they just show in grey.</p>
     </section>
 
-    <section class="panel">
-      <h2>Import from SMS</h2>
+    <section class="panel" data-sec="sms">
       <div id="smsSettingsNative" hidden>
         <p class="small" id="smsPermLine" style="margin:0"></p>
         <label class="check" id="smsAutoWrap" style="margin-top:12px"><input type="checkbox" id="smsAutoToggle"> <span>Check for new payments each time the app opens<br><span class="muted small">You’re always asked before anything is added.</span></span></label>
@@ -134,8 +136,7 @@
       </div>
     </section>
 
-    <section class="panel">
-      <h2>Backup &amp; restore</h2>
+    <section class="panel" data-sec="backup">
       <p class="muted small hint" id="backupInfo"></p>
       <div class="btn-grid">
         <button class="btn primary" id="exportJson">Export backup (.json)</button>
@@ -162,19 +163,18 @@
     </section>
 
 
-    <section class="panel">
+    <section class="panel" data-sec="about">
       <h2>Storage</h2>
       <p class="small" id="storageInfo"></p>
     </section>
 
-    <section class="panel">
+    <section class="panel" data-sec="about">
       <h2>About</h2>
       <p class="small" id="aboutInfo"></p>
       <button class="btn ghost sm" id="checkUpdate">Check for updates</button>
     </section>
 
-    <section class="panel danger-zone">
-      <h2>Danger zone</h2>
+    <section class="panel danger-zone" data-sec="danger">
       <p class="muted small hint">Permanently deletes every expense, recurring payment and setting on this device.</p>
       <button class="btn ghost danger" id="wipeBtn">Delete all data…</button>
     </section>
@@ -182,7 +182,7 @@
 
   <!-- ───────── SMS import ───────── -->
   <section id="view-sms" class="view" hidden>
-    <header class="top"><div class="brand"><a href="#settings" class="icon-btn back" aria-label="Back to settings">‹</a><h1>Import from SMS</h1></div></header>
+    <header class="top"><div class="brand"><a href="#settings/sms" class="icon-btn back" aria-label="Back">‹</a><h1>Import from SMS</h1></div></header>
 
     <section class="panel">
       <h2>1. Load your messages</h2>
@@ -221,6 +221,7 @@
       <div class="panel-head"><h2>3. Review &amp; add</h2><button class="linkish" id="smsToggleAll">Select all</button></div>
       <p class="small" id="smsStats"></p>
       <div id="smsList"></div>
+      <div id="smsRefunds"></div>
       <div id="smsUnread"></div>
     </section>
 
@@ -247,7 +248,7 @@
               <label>Category when unsure<select id="smsDefCat"></select></label>
               <label>Payment method when unsure<select id="smsDefMethod"></select></label>
             </div>
-            <label>Skip messages containing (comma separated)<input id="smsIgnore" autocomplete="off" placeholder="refund, cashback"></label>
+            <label>Skip messages containing (comma separated)<input id="smsIgnore" autocomplete="off" placeholder="cashback"></label>
             <label>Skip these senders (comma separated)<input id="smsSkipSenders" autocomplete="off" placeholder="e.g. PAYTMB, JIOPAY"></label>
           </div>
           <p class="muted small">Changes apply the next time you tap “Find expenses”.</p>
@@ -256,9 +257,11 @@
     </section>
   </section>
 
-  <!-- ───────── Spending trends ───────── -->
-  <section id="view-trends" class="view" hidden>
-    <header class="top"><div class="brand"><a href="#home" class="icon-btn back" aria-label="Back">‹</a><h1>Spending trends</h1></div></header>
+  <!-- ───────── Insights (+ spending trends) ───────── -->
+  <section id="view-insights" class="view" hidden>
+    <header class="top"><div class="brand"><h1>Insights</h1></div></header>
+    <div id="insTop"></div>
+    <h2 class="section-title" id="trendsTitle">Spending trends</h2>
     <div class="seg" id="trPeriod" role="tablist">
       <button data-p="week">Week</button><button data-p="month">Month</button><button data-p="3m">3 months</button><button data-p="year">Year</button><button data-p="custom">Custom</button>
     </div>
@@ -301,6 +304,21 @@
     <p class="muted intro">These expenses are in “Other”, grouped by who you paid. Pick a category once: it’s applied to all their expenses, and future SMS from the same person or shop get it automatically.</p>
     <section class="panel" id="sortList"></section>
   </section>
+
+  <!-- ───────── Search all expenses ───────── -->
+  <section id="view-search" class="view" hidden>
+    <header class="top"><div class="brand"><a href="#home" class="icon-btn back" aria-label="Back">‹</a><h1>Search</h1></div></header>
+    <label class="search-box"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4"/></svg><input type="search" id="qInput" placeholder="Shop, person, note, amount…" aria-label="Search all expenses" autocomplete="off"></label>
+    <div class="filter-row">
+      <select id="qPeriod" aria-label="Dates"><option value="all">All time</option><option value="month">This month</option><option value="3m">Last 3 months</option><option value="year">This year</option><option value="custom">Choose dates…</option></select>
+      <select id="qCat" aria-label="Category"></select>
+      <select id="qMethod" aria-label="Paid with"></select>
+      <select id="qSort" aria-label="Sort"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="big">Largest first</option></select>
+    </div>
+    <div class="row2 form" id="qCustom" hidden><label>From<input type="date" id="qFrom"></label><label>To<input type="date" id="qTo"></label></div>
+    <div class="q-total" id="qTotal"></div>
+    <section class="panel tx-panel" id="qList"></section>
+  </section>
 </div>
 
 <div class="sms-bar" id="sortBar" hidden>
@@ -313,44 +331,50 @@
   <button class="btn primary" id="smsAdd">Add</button>
 </div>
 
-<button class="fab" id="fab" aria-label="Add">+</button>
-
 <nav class="tabbar" aria-label="Sections">
   <a href="#home" data-tab="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7v9a1 1 0 01-1 1h-4v-6H9v6H5a1 1 0 01-1-1z"/></svg><span>Home</span></a>
+  <a href="#insights" data-tab="insights"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16M8 15l4-4 3 3 5-6"/></svg><span>Insights</span></a>
+  <span class="tab-add-slot"><button class="tab-add" id="fab" aria-label="Add expense"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></span>
   <a href="#recurring" data-tab="recurring"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0114-5.3M20 12a8 8 0 01-14 5.3M18 3v4h-4M6 21v-4h4"/></svg><span>Recurring</span></a>
-  <a href="#settings" data-tab="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg><span>Settings</span></a>
+  <a href="#settings" data-tab="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M16 4v4M10 10v4M16 16v4"/></svg><span>Settings</span></a>
 </nav>
 
 <!-- Expense sheet -->
 <div class="overlay" id="expenseModal" hidden>
-  <form class="modal" id="expenseForm" novalidate>
+  <form class="modal add-sheet" id="expenseForm" novalidate>
     <div class="modal-head">
       <h3 id="expTitle">Add expense</h3>
+      <span class="spacer"></span>
+      <label class="date-chip"><span id="fDateLabel">Today</span><input type="date" id="fDate" aria-label="Date"></label>
       <button type="button" class="icon-btn" data-close aria-label="Close">×</button>
     </div>
-    <label class="amount-field"><span class="cur-sym">₹</span><input id="fAmount" inputmode="decimal" placeholder="0" autocomplete="off" aria-label="Amount"></label>
-    <div class="row2">
-      <label>Date<input type="date" id="fDate"></label>
-      <label>Paid with<select id="fMethod"></select></label>
+    <label class="amount-field big"><span class="cur-sym">₹</span><input id="fAmount" inputmode="decimal" placeholder="0" autocomplete="off" aria-label="Amount"></label>
+    <div class="recent-wrap" id="fRecentWrap"><div class="field-label">Recent — tap to fill</div><div class="hscroll" id="fRecent"></div></div>
+    <div class="cat-grid" id="fCats" role="group" aria-label="Category"></div>
+    <div class="hscroll method-chips" id="fMethods" role="group" aria-label="Paid with"></div>
+    <div class="row2 note-row">
+      <label>Note<input id="fNote" maxlength="120" placeholder="What was it for?" autocomplete="off"></label>
+      <label id="fRepeatWrap">Repeat
+        <select id="fRepeat">
+          <option value="">Doesn’t repeat</option>
+          <option value="weekly">Every week</option>
+          <option value="monthly">Every month</option>
+          <option value="yearly">Every year</option>
+        </select>
+      </label>
     </div>
-    <div class="field-label">Category</div>
-    <div class="chips" id="fCats"></div>
-    <label>Note<input id="fNote" maxlength="120" placeholder="What was it for? (optional)" autocomplete="off"></label>
-    <label id="fRepeatWrap">Repeat
-      <select id="fRepeat">
-        <option value="">Doesn’t repeat</option>
-        <option value="weekly">Every week</option>
-        <option value="monthly">Every month</option>
-        <option value="yearly">Every year</option>
-      </select>
-    </label>
+    <div id="fRefunds"></div>
     <p class="rec-note" id="fRecNote" hidden></p>
     <p class="form-error" id="fError"></p>
+    <div class="keypad" id="keypad" aria-hidden="true">
+      <button type="button" tabindex="-1">1</button><button type="button" tabindex="-1">2</button><button type="button" tabindex="-1">3</button>
+      <button type="button" tabindex="-1">4</button><button type="button" tabindex="-1">5</button><button type="button" tabindex="-1">6</button>
+      <button type="button" tabindex="-1">7</button><button type="button" tabindex="-1">8</button><button type="button" tabindex="-1">9</button>
+      <button type="button" tabindex="-1">.</button><button type="button" tabindex="-1">0</button><button type="button" tabindex="-1" data-key="back" aria-label="Delete digit">⌫</button>
+    </div>
     <div class="modal-foot">
       <button type="button" class="btn ghost danger" id="fDelete" hidden>Delete</button>
-      <span class="spacer"></span>
-      <button type="button" class="btn ghost" data-close>Cancel</button>
-      <button type="submit" class="btn primary">Save</button>
+      <button type="submit" class="btn primary save-btn" id="fSave">Save</button>
     </div>
   </form>
 </div>

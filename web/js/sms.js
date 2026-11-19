@@ -2,7 +2,7 @@
 // debit messages into suggested expenses. Everything runs on the phone; nothing is
 // stored except the expenses the user confirms.
 
-import { isoDate, hash } from './util.js';
+import { isoDate, hash, addDays, parseIso } from './util.js';
 
 // ─── Reading the backup file ─────────────────────────────────────────────────
 function decodeXml(s) {
@@ -44,6 +44,10 @@ const RX = {
   strongDebit: /\b(debited|debit (of|by|for)|has a debit|spent|sent|withdrawn|withdrawal|purchase|txn\.? of|charged|deducted|dr\.?|used (for|at)|transferred|auto-?debit|processed payment)\b/i,
   credit: /\b(credited to (your|a\/c|ac|acct|account)|has been credited|is credited|received|deposited)\b/i,
   account: /(a\/c|acct|account|\bcard\b|\bupi\b|\bvpa\b|wallet|xx\d|x\d{3,}|\*\d{3,}|\bpos\b|\batm\b|neft|imps|rtgs|bank)/i,
+  // Money given back for a purchase (2.2.0). Must say the money actually arrived.
+  refund: /\b(refund(ed|s)?|revers(ed|al)|chargeback)\b/i,
+  refundDone: /\b(credited|received|refunded|reversed|processed|added|deposited|has been (credited|refunded|processed))\b/i,
+  refundPending: /\b(will be|to be|would be|initiated|request(ed)? (for|a) refund|within \d+|in \d+-\d+ (working |business )?days|failed|rejected|not eligible)\b/i,
 };
 
 function toNumber(s) { const n = Number(String(s).replace(/,/g, '')); return Number.isFinite(n) ? Math.round(n * 100) / 100 : null; }
@@ -150,6 +154,51 @@ export function senderCode(address) {
 }
 const isPersonalNumber = (address) => /^\+?\d[\d\s-]{9,}$/.test(String(address || '').trim());
 
+// ─── Refunds (2.2.0) ─────────────────────────────────────────────────────────
+const REND = String.raw`(?=\s+(?:on|for|via|to|has|have|is|was|credited|refunded|against|towards|into|in)\b|\s+ref|\s+upi|\s+avl|\.\s|\.$|,|;|\n|\(|$)`;
+const REFUND_MERCHANT = [
+  new RegExp(String.raw`\b(?:refund(?:ed)?|reversal|reversed)\s+(?:of\s+.{0,25}?\s+)?(?:from|by)\s+(?:merchant\s+)?([A-Za-z][\w &.'*\-]{1,40}?)${REND}`, 'i'),
+  new RegExp(String.raw`\b(?:from|by)\s+(?:merchant\s+)?([A-Za-z][\w &.'*\-]{1,40}?)${REND}`, 'i'),
+  new RegExp(String.raw`\b(?:order|purchase|txn|transaction)\s+(?:at|with|on|from)\s+([A-Za-z][\w &.'*\-]{1,40}?)${REND}`, 'i'),
+];
+export function findRefundMerchant(body) {
+  for (const re of REFUND_MERCHANT) {
+    const m = body.match(re);
+    if (m && m[1] && !STOP.test(m[1].trim()) && /[a-z]/i.test(m[1]) && !/^(merchant|refund|reversal)$/i.test(m[1].trim())) return tidyName(m[1]);
+  }
+  return findMerchant(body);
+}
+
+const daysApart = (a, b) => Math.abs(Math.round((parseIso(a) - parseIso(b)) / 86400000));
+
+/**
+ * Which expense does a refund belong to? Looks back 60 days for expenses that cost at least
+ * the refund, preferring the same shop/person (by name in the SMS) and an exact amount.
+ * net(e) = what the expense still costs after earlier refunds.
+ * Returns up to 6 expenses, best first (empty if nothing is a sensible match).
+ */
+export function matchRefund(refund, expenses, net = (e) => Number(e.amount), skip = () => false) {
+  const lo = addDays(refund.date, -60);
+  const body = (refund.body || '').toLowerCase();
+  const rk = merchantKey(refund.merchant || '');
+  const scored = [];
+  for (const e of expenses) {
+    if (e.date < lo || e.date > refund.date || skip(e)) continue;
+    const n = net(e);
+    if (n + 0.005 < refund.amount) continue;
+    const ek = merchantKey(e.note || '');
+    const first = ek.split(' ')[0] || '';
+    const nameHit = ek.length >= 3 && (body.includes(ek) || (rk && rk.length >= 3 && (rk.includes(ek) || ek.includes(rk))) || (first.length >= 4 && body.includes(first)));
+    let score = nameHit ? 5 : 0;
+    if (Math.abs(n - refund.amount) < 0.01) score += 3;
+    else if (Math.abs(Number(e.amount) - refund.amount) < 0.01) score += 2;
+    if (score < 3) continue; // need the name or the exact amount
+    score -= daysApart(e.date, refund.date) / 60;
+    scored.push({ e, score });
+  }
+  return scored.sort((a, b) => b.score - a.score).slice(0, 6).map((x) => x.e);
+}
+
 // ─── Categorising ────────────────────────────────────────────────────────────
 const ruleCache = new Map();
 function ruleRegex(k) {
@@ -195,13 +244,15 @@ export const smsKey = (msg) => 'sms:' + hash(msg.address + '|' + msg.ts + '|' + 
 /**
  * messages: from parseSmsBackup. from/to: 'YYYY-MM-DD' inclusive.
  * existing: current expenses (to skip already-imported and flag likely duplicates).
- * Returns { items, skipped: { otp, income, notPayment, filtered, noAmount, other, imported }, unread: [msgs], inRange }.
+ * Returns { items, refunds, skipped: { otp, income, notPayment, filtered, noAmount, other, imported }, unread: [msgs], inRange }.
  */
 export function analyze(messages, { from, to, cfg, existing = [] }) {
   const skipped = { otp: 0, income: 0, notPayment: 0, filtered: 0, other: 0, imported: 0 };
   const unread = [];
   const items = [];
+  const refunds = [];
   const importedIds = new Set(existing.map((e) => e.id));
+  existing.forEach((e) => (e.refunds || []).forEach((r) => r.key && importedIds.add(r.key)));
   const byDateAmt = new Map();
   existing.forEach((e) => { if (!String(e.id).startsWith('sms:')) byDateAmt.set(e.date + '|' + Number(e.amount).toFixed(2), e); });
   const skipSenders = cfg.skipSenders.map((s) => s.toUpperCase());
@@ -225,6 +276,18 @@ export function analyze(messages, { from, to, cfg, existing = [] }) {
     const code = senderCode(msg.address);
     if ((cfg.skipPersonal && isPersonalNumber(msg.address)) || skipSenders.some((s) => s && (code.includes(s) || msg.address.toUpperCase().includes(s)))) { skipped.filtered++; continue; }
     if (RX.otp.test(body)) { skipped.otp++; continue; }
+    if (RX.refund.test(body) && !(RX.strongDebit.test(body) && !RX.credit.test(body) && !/refunded/i.test(body))) {
+      // Refunds are offered separately, to be taken off the purchase they belong to.
+      if (RX.refundPending.test(body) || !RX.refundDone.test(body)) { skipped.notPayment++; continue; }
+      const key = smsKey(msg);
+      if (importedIds.has(key)) { skipped.imported++; continue; }
+      const amount = findAmount(body);
+      if (!(amount > 0)) { skipped.other++; continue; }
+      // The bank and the shop often both send one: keep the first.
+      if (refunds.some((r) => r.amount === amount && Math.abs(r.ts - msg.ts) <= 30 * 60 * 1000)) continue;
+      refunds.push({ key, ts: msg.ts, date, sender: code || msg.address, body, amount, merchant: findRefundMerchant(body), ref: findRef(body) });
+      continue;
+    }
     if (!RX.debit.test(body) || !RX.account.test(body)) {
       if (RX.credit.test(body)) skipped.income++; else skipped.other++;
       continue;
@@ -283,5 +346,6 @@ export function analyze(messages, { from, to, cfg, existing = [] }) {
   });
 
   items.sort((a, b) => b.ts - a.ts);
-  return { items, skipped, unread: unread.reverse(), inRange };
+  refunds.sort((a, b) => b.ts - a.ts);
+  return { items, refunds, skipped, unread: unread.reverse(), inRange };
 }

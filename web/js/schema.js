@@ -34,7 +34,7 @@ export const DEFAULT_CATEGORIES = ['Food & dining', 'Groceries', 'Transport', 'R
 export const FREQUENCIES = ['daily', 'weekly', 'monthly', 'yearly'];
 
 export function defaultSettings() {
-  return { currency: 'INR', budget: 0, categories: DEFAULT_CATEGORIES.map((c) => ({ ...c })), methods: DEFAULT_METHODS.slice(), sms: defaultSmsSettings() };
+  return { currency: 'INR', budget: 0, budgetAlerts: true, theme: 'system', categories: DEFAULT_CATEGORIES.map((c) => ({ ...c })), methods: DEFAULT_METHODS.slice(), sms: defaultSmsSettings() };
 }
 
 // ─── Migrations ──────────────────────────────────────────────────────────────
@@ -82,12 +82,31 @@ export function migrate(data, fromVersion) {
 const str = (v, max = 200) => (v == null ? '' : String(v)).trim().slice(0, max);
 const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
+// Money given back for an expense (added in app 2.2.0, optional): [{ amount, date, key?, note? }].
+// The expense keeps its original amount; what it really cost is netAmount(e).
+function normRefunds(list, amount) {
+  if (!Array.isArray(list)) return { refunds: undefined };
+  let left = amount;
+  const out = [];
+  for (const r of list) {
+    if (!r || typeof r !== 'object') continue;
+    const a = Math.min(round2(r.amount), round2(left));
+    if (!(a > 0)) continue;
+    out.push({ ...r, amount: a, date: isIsoDate(r.date) ? r.date : todayIso(), note: str(r.note, 120) });
+    left = round2(left - a);
+  }
+  return { refunds: out.length ? out : undefined };
+}
+export const refundedOf = (e) => (e && Array.isArray(e.refunds) ? round2(e.refunds.reduce((a, r) => a + (Number(r.amount) || 0), 0)) : 0);
+/** What an expense really cost after refunds. Use this for every total. */
+export const netAmount = (e) => Math.max(0, round2((Number(e.amount) || 0) - refundedOf(e)));
+
 export function normalizeExpense(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const amount = round2(raw.amount);
   if (!(amount > 0) || !isIsoDate(raw.date)) return null;
   const now = Date.now();
-  return {
+  const out = {
     ...raw,
     id: str(raw.id, 120) || uid('e'),
     amount,
@@ -96,9 +115,12 @@ export function normalizeExpense(raw) {
     method: str(raw.method, 40) || 'Other',
     note: str(raw.note, 120),
     recurringId: raw.recurringId ? String(raw.recurringId) : null,
+    ...normRefunds(raw.refunds, amount),
     createdAt: num(raw.createdAt, now),
     updatedAt: num(raw.updatedAt, now),
   };
+  if (!out.refunds) delete out.refunds;
+  return out;
 }
 
 export function normalizeRule(raw) {
@@ -128,13 +150,21 @@ export function normalizeSettings(raw) {
   const d = defaultSettings();
   if (!raw || typeof raw !== 'object') return d;
   const cats = Array.isArray(raw.categories)
-    ? raw.categories.filter((c) => c && str(c.name, 40)).map((c, i) => ({ ...c, name: str(c.name, 40), color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : PALETTE[i % PALETTE.length], excluded: c.excluded === true }))
+    ? raw.categories.filter((c) => c && str(c.name, 40)).map((c, i) => {
+      // budget: optional monthly limit for this category (added in app 2.2.0)
+      const out = { ...c, name: str(c.name, 40), color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : PALETTE[i % PALETTE.length], excluded: c.excluded === true };
+      const b = round2(num(c.budget, 0));
+      if (b > 0) out.budget = b; else delete out.budget;
+      return out;
+    })
     : [];
   const methods = Array.isArray(raw.methods) ? raw.methods.map((m) => str(m, 40)).filter(Boolean) : [];
   return {
     ...raw,
     currency: /^[A-Z]{3}$/.test(raw.currency) ? raw.currency : d.currency,
     budget: Math.max(0, round2(num(raw.budget, 0))),
+    budgetAlerts: raw.budgetAlerts !== false,                      // 2.2.0
+    theme: ['system', 'light', 'dark'].includes(raw.theme) ? raw.theme : 'system', // 2.2.0
     categories: cats.length ? cats : d.categories,
     methods: methods.length ? methods : d.methods,
     sms: normalizeSmsSettings(raw.sms), // optional (added in app 1.1.0) — no migration needed
@@ -190,15 +220,15 @@ function parseBackup(text) {
 // ─── CSV (one spreadsheet: expenses + recurring payments) ─────────────────────
 // Columns are matched by name on import, so adding columns later is safe.
 const FREQ_LABEL = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' };
-const CSV_HEADER = 'Type,Date,Category,Amount,Currency,Paid with,Note,Recurring payment,Repeats,Every,Ends,Status,Last added,Id';
+const CSV_HEADER = 'Type,Date,Category,Amount,Currency,Paid with,Note,Recurring payment,Repeats,Every,Ends,Status,Last added,Refunded,Id';
 
 export function toCSV(expenses, currency, rules = []) {
   const name = Object.fromEntries(rules.map((r) => [r.id, r.note || r.category]));
   const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
   const exp = expenses.slice().sort((a, b) => a.date.localeCompare(b.date)).map((e) =>
-    ['Expense', e.date, q(e.category), e.amount, currency, q(e.method), q(e.note), q(e.recurringId ? (name[e.recurringId] || 'Yes') : ''), '', '', '', '', '', q(e.id)].join(','));
+    ['Expense', e.date, q(e.category), e.amount, currency, q(e.method), q(e.note), q(e.recurringId ? (name[e.recurringId] || 'Yes') : ''), '', '', '', '', '', refundedOf(e) || '', q(e.id)].join(','));
   const rec = rules.map((r) =>
-    ['Recurring', r.startDate, q(r.category), r.amount, currency, q(r.method), q(r.note), '', FREQ_LABEL[r.frequency], r.interval, r.endDate || '', r.active ? 'Active' : 'Paused', r.lastGenerated || '', q(r.id)].join(','));
+    ['Recurring', r.startDate, q(r.category), r.amount, currency, q(r.method), q(r.note), '', FREQ_LABEL[r.frequency], r.interval, r.endDate || '', r.active ? 'Active' : 'Paused', r.lastGenerated || '', '', q(r.id)].join(','));
   return '﻿' + [CSV_HEADER, ...exp, ...rec].join('\n');
 }
 
@@ -241,7 +271,7 @@ function parseCsv(text) {
     type: col('type'), date: col('date', 'first payment', 'start date'), amt: col('amount'), cat: col('category'),
     method: col('paid with', 'method', 'payment method'), note: col('note', 'notes', 'description', 'name'),
     freq: col('repeats', 'frequency'), every: col('every', 'interval'), end: col('ends', 'end date'),
-    status: col('status'), last: col('last added', 'last generated'), id: col('id'),
+    status: col('status'), last: col('last added', 'last generated'), refunded: col('refunded', 'refund'), id: col('id'),
   };
   if (I.date < 0 || I.amt < 0) throw new Error('The CSV needs at least “Date” and “Amount” columns.');
   const expenses = [], recurring = [], seen = {};
@@ -268,7 +298,9 @@ function parseCsv(text) {
     const key = [date, category, amount, method, note].join('|');
     seen[key] = (seen[key] || 0) + 1;
     const id = get('id') || 'csv-' + hash(key + '#' + seen[key]);
-    const e = normalizeExpense({ id, date, amount, category, method, note, recurringId: id.startsWith('rec:') ? id.split(':')[1] : null });
+    const refunded = round2(get('refunded').replace(/[^\d.]/g, ''));
+    const e = normalizeExpense({ id, date, amount, category, method, note, recurringId: id.startsWith('rec:') ? id.split(':')[1] : null,
+      refunds: refunded > 0 ? [{ amount: refunded, date, note: 'From spreadsheet' }] : undefined });
     if (e) expenses.push(e); else skipped++;
   });
   if (!expenses.length && !recurring.length) throw new Error('No valid rows found in the CSV (check the Date and Amount columns).');

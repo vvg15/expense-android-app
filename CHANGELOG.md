@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.2.0 — 19 Nov 2026 · data format v2 (no upgrade needed; new fields are optional)
+**New look**
+- Home: a big "Spent this month" card with a budget ring, days left and how much you can safely spend per day; small cards for daily average, month-end pace and change vs last month.
+- "Where it went": ring chart plus a list with category icons (tap a category to see its expenses).
+- Category icons everywhere instead of letters.
+- Bottom bar: Home · Insights · **+** · Recurring · Settings. The + adds an expense (or a recurring payment on that tab).
+- New-payments-in-SMS now appears as a strip on Home ("3 payments to review") instead of a popup.
+- Quick add: big amount with a number pad (no keyboard jumping), recent shops/people as one-tap chips (fill category and payment method), category grid, payment chips, date chip.
+- Settings is a short list; each section opens on its own page.
+- Appearance: System / Light / Dark (Settings → Currency, budget & look). On Android the status bar follows.
+
+**Category budgets**
+- Monthly limit per category (Settings → Category budgets). Progress shows on Home; a warning appears at 80% and when a budget is used up (also for the overall monthly budget). Can be switched off.
+
+**Refunds**
+- Refund / reversal SMS are recognised and matched to the purchase they belong to (same shop or exact amount, within 60 days). You confirm in the SMS review; the expense then counts at what it really cost.
+- Add a refund by hand when editing an expense. Totals, charts and budgets all use the cost after refunds.
+- The spreadsheet export has a new "Refunded" column (imported back too).
+- "Refund" and "reversal" were removed from the default "skip messages containing" list.
+
+**Search across all months**
+- New Search screen (🔍 on Home): searches every month by shop, person, note, amount, category or date; filter by dates, category and payment; sort by newest, oldest or largest.
+- Swipe an expense left for **Edit** / **Delete**; deleting can be undone.
+
+**Insights tab**
+- This month vs last month (same days), last 6 months at a glance, plain-language highlights, and where you spent most. Spending trends are below.
+
+**Android**: bridge v3 adds `setTheme` (status / navigation bar colours).
+
 ## 2.1.1 — 19 Nov 2026
 - Fixed: category names in Settings were squeezed into tiny boxes.
 - App lock is now near the top of Settings and always shown in the Android app; if it can't start, it shows the reason instead of hiding. Same for Automatic backup. About shows the native bridge version.

@@ -57,7 +57,7 @@ GitHub builds the app for you, so you don't need Android Studio.
 | **Page address** `https://appassets.androidplatform.net/` (`MainActivity.java`) | Never change it. The data on the phone is tied to this address. |
 | **Signing key** | Never change it (see above). |
 | **Data format** (`web/js/schema.js`) | Changed the shape of saved records? Bump `SCHEMA_VERSION` and **add** a migration. Never edit old migrations. Phones upgrade their data automatically on first launch, and old backups import into any newer version. |
-| **Native bridge** (`Bridge.java`, `web/js/native.js`) | Only add methods, never rename or remove them, and bump `bridgeVersion()`. The page checks a method exists before calling it. (v1: SMS, files, updates · v2: app lock, backup folder.) |
+| **Native bridge** (`Bridge.java`, `web/js/native.js`) | Only add methods, never rename or remove them, and bump `bridgeVersion()`. The page checks a method exists before calling it. (v1: SMS, files, updates · v2: app lock, backup folder · v3: setTheme.) |
 | **"Not counted" categories** | Categories with `excluded: true` stay out of Spent, budget and charts. Data format v2 added Transfers and Investments. |
 | **New web files** | Nothing to do for Android. Add them to `web/sw.js` only if you also publish the browser version. |
 

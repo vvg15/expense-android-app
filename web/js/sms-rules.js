@@ -28,7 +28,8 @@ export const DEFAULT_SMS_RULES = [
   ...TRANSFER_WORDS.map((k) => ({ k, c: 'Transfers' })),
 ];
 
-export const DEFAULT_IGNORE_WORDS = ['refund', 'cashback', 'reversed', 'reversal'];
+// Refunds are recognised separately (2.2.0), so they're no longer in this list.
+export const DEFAULT_IGNORE_WORDS = ['cashback'];
 
 export function defaultSmsSettings() {
   return {
