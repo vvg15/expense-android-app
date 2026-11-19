@@ -2,7 +2,9 @@
 
 A private, offline expense tracker. The app has **no internet access**, and all data stays on the phone.
 
-**Features:** expenses with categories, budget, charts · recurring payments · **finds payments in your bank / card / UPI SMS and asks before adding them** · backup and restore (.json) · spreadsheet export and import (.csv).
+**Features:** expenses with categories, budget, charts · **spending trends** (week/month/3 months/year, filters, zoom) · recurring payments · **finds payments in your bank / card / UPI SMS and asks before adding them** · transfers & investments kept out of spending · sort "Other" by person · **app lock** (fingerprint / screen lock) · **automatic backups** to a folder · backup and restore (.json) · spreadsheet export and import (.csv).
+
+What's planned next: [docs/ROADMAP.md](docs/ROADMAP.md). What changed: [CHANGELOG.md](CHANGELOG.md).
 
 ```
 web/            the app's screens and logic (HTML/CSS/JS), shared with the browser version
@@ -55,18 +57,23 @@ GitHub builds the app for you, so you don't need Android Studio.
 | **Page address** `https://appassets.androidplatform.net/` (`MainActivity.java`) | Never change it. The data on the phone is tied to this address. |
 | **Signing key** | Never change it (see above). |
 | **Data format** (`web/js/schema.js`) | Changed the shape of saved records? Bump `SCHEMA_VERSION` and **add** a migration. Never edit old migrations. Phones upgrade their data automatically on first launch, and old backups import into any newer version. |
-| **Native bridge** (`Bridge.java`, `web/js/native.js`) | Only add methods, never rename or remove them. The page checks a method exists before calling it. |
+| **Native bridge** (`Bridge.java`, `web/js/native.js`) | Only add methods, never rename or remove them, and bump `bridgeVersion()`. The page checks a method exists before calling it. (v1: SMS, files, updates · v2: app lock, backup folder.) |
+| **"Not counted" categories** | Categories with `excluded: true` stay out of Spent, budget and charts. Data format v2 added Transfers and Investments. |
 | **New web files** | Nothing to do for Android. Add them to `web/sw.js` only if you also publish the browser version. |
 
 ## 4. Reading SMS: how it works
 
 - **Optional.** On first launch the Home screen offers *Add expenses from your bank SMS*. Before Android's permission prompt, the app explains in plain words what it reads, why, and that nothing leaves the phone. You can also turn it on or off later in *Settings → Import from SMS*.
-- **Every time the app opens** (and when you come back to it after 30+ minutes) it reads new messages since the last checks (at most 90 days back) and finds bank, card and UPI debits. If there are new ones, it asks: **Review / Later / Ignore**. *Review* opens the same review screen as the manual import, where you can edit, untick and confirm. Anything left unticked is remembered as ignored and not asked about again.
+- **Every time the app opens** (and when you come back to it after 30+ minutes) it reads new messages (when you first turn it on, it asks how far back to go: this month, 2, 3 or 6 months) and finds bank, card and UPI debits. If there are new ones, it asks: **Review / Later / Ignore**. *Review* opens the same review screen as the manual import, where you can edit, untick and confirm. Anything left unticked is remembered as ignored and not asked about again.
 - **Manual import** (*Settings → Find payments in SMS…*) reads the phone's messages for any date range. It also shows previously ignored ones, marked "You ignored this before". An SMS backup file still works too.
 - **Everything is analysed on the phone.** Messages from ordinary phone numbers are skipped before analysis (configurable). No message text is stored, only the expenses you confirm.
 - The same recognition as before: duplicate detection across banks, transfers to your own accounts, category rules with learning, and so on. New: the card or account's last digits are shown ("••9005").
 
-## 5. Publishing on Google Play (when you're ready)
+## 5. App lock and automatic backup
+- **App lock** (*Settings → App lock*): uses Android's own fingerprint/face/screen-lock prompt. The app never sees fingerprints or the PIN. Turning it on or off asks for verification first. It doesn't re-lock while you're in a file picker or share sheet the app opened.
+- **Automatic backup** (*Settings → Backup & restore*): choose a folder once, for example `Documents`. Google Drive also works if it shows up in the folder picker. Files are named `expenses-autobackup_YYYY-MM-DD.json`, older ones beyond the number you keep are deleted, and backups in a phone folder survive uninstalling the app. For protection against losing the phone, pick a cloud folder or occasionally *Share backup…* to Drive.
+
+## 6. Publishing on Google Play (when you're ready)
 
 See **[docs/PLAY_STORE.md](docs/PLAY_STORE.md)**. In short:
 - Google Play allows reading SMS for **"SMS-based money management"** (budget tracking) only after Google reviews a **Permissions Declaration**. Approval isn't guaranteed. The app is built to meet the requirements: SMS is the core feature, it's optional, there's an in-app explanation before the permission prompt, the work happens on-device, and nothing is shared.

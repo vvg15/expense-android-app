@@ -4,7 +4,8 @@ import {
   buildBackup, parseImportText, toCSV,
 } from './schema.js';
 import { generateDue, nextDue, describe, monthlyEquivalent, occurrences } from './recurring.js';
-import { parseSmsBackup, analyze as analyzeSms, merchantKey } from './sms.js';
+import { parseSmsBackup, analyze as analyzeSms, merchantKey, looksLikePerson } from './sms.js';
+import { createTrends } from './trends.js';
 import { defaultSmsSettings } from './sms-rules.js';
 import { isNative, native, onNative } from './native.js';
 import { pad, ymOf, isoDate, todayIso, parseIso, daysIn, shiftMonth, monthName, prettyDate, esc, uid, parseAmount, addDays } from './util.js';
@@ -60,6 +61,10 @@ function symbolFor(code, loc) {
 const currencySymbol = () => symbolFor(state.settings.currency, locale());
 const catColor = (name) => (state.settings.categories.find((c) => c.name === name) || {}).color || GREY;
 const sum = (list) => list.reduce((a, e) => a + (Number(e.amount) || 0), 0);
+// Categories marked "not counted as spending" (Transfers, Investments, …) stay out of totals.
+const isExcluded = (name) => !!(state.settings.categories.find((c) => c.name === name) || {}).excluded;
+const spendOf = (list) => list.filter((e) => !isExcluded(e.category));
+const hasCategory = (name) => state.settings.categories.some((c) => c.name === name);
 const ruleById = (id) => state.rules.find((r) => r.id === id);
 const ruleName = (r) => r.note || r.category;
 
@@ -69,7 +74,7 @@ function toast(msg) {
 }
 
 // ─── Generic dialog ──────────────────────────────────────────────────────────
-function dialog({ title, html = '', actions = [{ label: 'OK', value: true, kind: 'primary' }], input = null }) {
+function dialog({ title, html = '', actions = [{ label: 'OK', value: true, kind: 'primary' }], input = null, onBody = null }) {
   return new Promise((resolve) => {
     $('dlgTitle').textContent = title;
     $('dlgBody').innerHTML = html + (input ? `<input id="dlgInput" autocomplete="off" placeholder="${esc(input.placeholder || '')}">` : '');
@@ -91,6 +96,7 @@ function dialog({ title, html = '', actions = [{ label: 'OK', value: true, kind:
     });
     $('dialog').onclick = (e) => { if (e.target === $('dialog')) done(null); };
     $('dialog').hidden = false;
+    if (onBody) onBody($('dlgBody'), done);
     if (input) setTimeout(() => $('dlgInput').focus(), 50);
   });
 }
@@ -183,6 +189,7 @@ async function boot() {
     if (quickAdd) openExpense(null);
     if (added) toast(`Added ${added} recurring payment${added === 1 ? '' : 's'}`);
     if (isNative) setTimeout(() => smsStartupCheck(), 500);
+    if (isNative) setTimeout(() => runAutoBackup().catch(console.error), 1500);
   } catch (e) {
     console.error(e);
     document.querySelector('.app').innerHTML = `<div class="panel" style="margin-top:40px"><h2>Couldn’t open your data</h2><p class="small" style="margin-top:8px">${esc(e.message || e)}</p><p class="muted small" style="margin-top:8px">If you’re in a private/incognito window, open the app normally instead.</p></div>`;
@@ -201,6 +208,7 @@ async function boot() {
       // unless the permission was just switched on.
       const st = native.smsState();
       if (st === 'granted' && (state.smsLastState !== 'granted' || Date.now() - (state.smsLastCheck || 0) > 30 * 60 * 1000)) setTimeout(() => smsStartupCheck(), 300);
+      runAutoBackup().catch(console.error);
       state.smsLastState = st;
       if (state.view === 'settings') renderSettings();
       if (state.view === 'sms') renderSms();
@@ -258,11 +266,14 @@ $('checkUpdate').addEventListener('click', async () => {
 // ─── Routing ─────────────────────────────────────────────────────────────────
 function route() {
   const v = (location.hash || '#home').slice(1);
-  state.view = ['home', 'recurring', 'settings', 'sms'].includes(v) ? v : 'home';
-  ['home', 'recurring', 'settings', 'sms'].forEach((n) => ($('view-' + n).hidden = n !== state.view));
-  const tab = state.view === 'sms' ? 'settings' : state.view;
+  const VIEWS = ['home', 'recurring', 'settings', 'sms', 'trends', 'sort'];
+  state.view = VIEWS.includes(v) ? v : 'home';
+  VIEWS.forEach((n) => ($('view-' + n).hidden = n !== state.view));
+  const tab = { sms: 'settings', trends: 'home', sort: 'home' }[state.view] || state.view;
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
-  $('fab').hidden = state.view === 'settings' || state.view === 'sms';
+  $('fab').hidden = !['home', 'recurring'].includes(state.view);
+  $('fab').classList.remove('tuck');
+  if (state.view !== 'sort') $('sortBar').hidden = true;
   updateSmsBar();
   $('fab').setAttribute('aria-label', state.view === 'recurring' ? 'Add recurring payment' : 'Add expense');
   window.scrollTo(0, 0);
@@ -277,12 +288,15 @@ function renderAll() {
   if (state.view === 'recurring') renderRecurring();
   if (state.view === 'settings') renderSettings();
   if (state.view === 'sms') renderSms();
+  if (state.view === 'trends') trends.render();
+  if (state.view === 'sort') renderSort();
 }
 
 const monthExpenses = (ym) => state.expenses.filter((e) => e.date.startsWith(ym));
 
 function renderHome() {
   $('monthLabel').textContent = monthName(state.month);
+  $('thisMonth').hidden = state.month === ymOf(new Date());
   renderSmsIntro();
   renderBackupNudge(); renderCards(); renderCategories(); renderDaily(); renderFilterOptions(); renderList();
 }
@@ -291,18 +305,26 @@ function daysSince(ts) { return ts ? Math.floor((Date.now() - ts) / 86400000) : 
 
 function renderBackupNudge() {
   const el = $('backupNudge');
-  const d = daysSince(state.meta.lastBackupAt);
-  if (state.expenses.length >= 10 && d > 30) {
-    el.innerHTML = `<span>${d === Infinity ? 'You haven’t backed up yet.' : `Last backup was ${d} days ago.`} Your data lives only on this phone.</span><a class="linkish" href="#settings">Back up</a>`;
-    el.hidden = false;
-  } else el.hidden = true;
+  const ab = state.meta.autoBackup || {};
+  const snoozed = (state.meta.backupSnoozeUntil || 0) > Date.now();
+  let msg = '';
+  if (isNative && ab.on && ab.lastError && !snoozed) {
+    msg = 'Automatic backup couldn’t be saved. Choose the backup folder again in Settings.';
+  } else if (!snoozed && state.meta.backupReminders !== false && !autoBackupHealthy() && state.expenses.length >= 10) {
+    const d = daysSince(state.meta.lastBackupAt);
+    if (d > 30) msg = `${d === Infinity ? 'You haven’t backed up yet.' : `Last backup was ${d} days ago.`} Your data lives only on this phone.`;
+  }
+  el.hidden = !msg;
+  if (msg) el.innerHTML = `<span>${esc(msg)}</span><span class="nudge-actions"><a class="linkish" href="#settings">${ab.lastError ? 'Fix' : 'Back up'}</a><button class="icon-btn sm" data-action="snooze-backup" aria-label="Hide for 30 days">×</button></span>`;
 }
 
 function renderCards() {
   const ym = state.month, cur = ymOf(new Date());
-  const list = monthExpenses(ym);
+  const all = monthExpenses(ym);
+  const list = spendOf(all);
   const total = sum(list);
-  const prevTotal = sum(monthExpenses(shiftMonth(ym, -1)));
+  const notCounted = sum(all) - total;
+  const prevTotal = sum(spendOf(monthExpenses(shiftMonth(ym, -1))));
   const dim = daysIn(ym);
   const elapsed = ym === cur ? new Date().getDate() : ym < cur ? dim : 0;
   const avg = elapsed ? Math.round(total / elapsed) : 0;
@@ -335,30 +357,37 @@ function renderCards() {
   } else if (total > 0) cmpSub = 'Nothing last month';
 
   $('cards').innerHTML = `
-    <div class="card"><div class="label">Spent</div><div class="value num">${money(total)}</div><div class="sub">${list.length} expense${list.length === 1 ? '' : 's'}</div></div>
+    <div class="card"><div class="label">Spent</div><div class="value num">${money(total)}</div><div class="sub">${list.length} expense${list.length === 1 ? '' : 's'}${notCounted > 0 ? `<br><span class="muted">+ ${money(notCounted)} not counted</span>` : ''}</div></div>
     ${budgetCard}
     <div class="card"><div class="label">Daily average</div><div class="value num">${money(avg)}</div><div class="sub">${paceSub}</div></div>
     <div class="card"><div class="label">vs last month</div><div class="value num">${cmp}</div><div class="sub num">${cmpSub}</div></div>`;
 }
 
 function renderCategories() {
-  const list = monthExpenses(state.month);
-  if (!list.length) { $('catBreakdown').innerHTML = '<div class="empty">No expenses this month yet.</div>'; return; }
-  const total = sum(list), by = {};
-  list.forEach((e) => (by[e.category] = (by[e.category] || 0) + Number(e.amount)));
+  const all = monthExpenses(state.month);
+  if (!all.length) { $('catBreakdown').innerHTML = '<div class="empty">No expenses this month yet.</div>'; return; }
+  const by = {};
+  all.forEach((e) => (by[e.category] = (by[e.category] || 0) + Number(e.amount)));
   const rows = Object.entries(by).sort((a, b) => b[1] - a[1]);
-  const max = rows[0][1];
-  $('catBreakdown').innerHTML = rows.map(([name, amt]) => `
-    <button class="cat-row ${state.filterCat === name ? 'active' : ''}" data-cat="${esc(name)}">
+  const counted = rows.filter(([n]) => !isExcluded(n)), other = rows.filter(([n]) => isExcluded(n));
+  const total = counted.reduce((a, r) => a + r[1], 0) || 1;
+  const max = Math.max(1, ...rows.map((r) => r[1]));
+  const row = ([name, amt], muted) => `
+    <button class="cat-row ${state.filterCat === name ? 'active' : ''} ${muted ? 'muted-row' : ''}" data-cat="${esc(name)}">
       <span class="cat-name"><span class="dot" style="background:${catColor(name)}"></span>${esc(name)}</span>
-      <span class="cat-amt num">${money(amt)}<small>${Math.round((amt / total) * 100)}%</small></span>
+      <span class="cat-amt num">${money(amt)}${muted ? '' : `<small>${Math.round((amt / total) * 100)}%</small>`}</span>
       <span class="bar"><span style="width:${(amt / max) * 100}%;background:${catColor(name)}"></span></span>
-    </button>`).join('');
+    </button>`;
+  let html = counted.map((r) => row(r, false)).join('');
+  const otherAmt = by.Other || 0, otherCount = all.filter((e) => e.category === 'Other').length;
+  if (otherAmt / total >= 0.1 && otherCount >= 3) html += `<button class="linkish sort-link" data-action="sort-other">Sort the ${money(otherAmt)} in “Other” by person or shop →</button>`;
+  if (other.length) html += `<div class="cat-divider">Not counted as spending</div>` + other.map((r) => row(r, true)).join('');
+  $('catBreakdown').innerHTML = html;
 }
 
 function renderDaily() {
   const ym = state.month, dim = daysIn(ym), cur = ymOf(new Date());
-  const list = monthExpenses(ym);
+  const list = spendOf(monthExpenses(ym));
   const days = new Array(dim).fill(0);
   list.forEach((e) => { const d = Number(e.date.slice(8, 10)); if (d >= 1 && d <= dim) days[d - 1] += Number(e.amount); });
   const budget = state.settings.budget, dailyBudget = budget > 0 ? budget / dim : 0;
@@ -426,18 +455,20 @@ function renderList() {
   let html = groups.map((g) => `
     <div class="day-group">
       <div class="day-head"><span>${esc(label(g.date))}</span><span class="num">${money(sum(g.items))}</span></div>
-      ${g.items.map((e) => {
-        const meta = [e.note ? esc(e.category) : '', esc(e.method), e.recurringId ? 'Recurring' : ''].filter(Boolean).join(' · ');
-        return `<button class="tx" data-id="${esc(e.id)}">
-          <span class="tx-icon" style="background:${catColor(e.category)}">${esc((e.category || '?').slice(0, 1).toUpperCase())}${e.recurringId ? '<span class="rec">↻</span>' : ''}</span>
-          <span class="tx-main"><div class="tx-title">${esc(e.note || e.category)}</div><div class="tx-meta">${meta}</div></span>
-          <span class="tx-amt num">${money(e.amount)}</span>
-        </button>`;
-      }).join('')}
+      ${g.items.map((e) => txHtml(e)).join('')}
     </div>`).join('');
   const filtered = state.filterCat !== 'all' || q;
   html += `<div class="list-foot"><span>${filtered ? `Showing ${rows.length} of ${all.length} <button class="linkish" data-action="clear" style="margin-left:6px">Clear</button>` : `${all.length} expense${all.length === 1 ? '' : 's'}`}</span><b class="num">${money(sum(rows))}</b></div>`;
   box.innerHTML = html;
+}
+
+function txHtml(e, showDate = false) {
+  const meta = [showDate ? esc(prettyDate(e.date, { day: 'numeric', month: 'short' })) : '', e.note ? esc(e.category) : '', esc(e.method), e.recurringId ? 'Recurring' : '', isExcluded(e.category) ? 'not counted' : ''].filter(Boolean).join(' · ');
+  return `<button class="tx" data-id="${esc(e.id)}">
+    <span class="tx-icon" style="background:${catColor(e.category)}">${esc((e.category || '?').slice(0, 1).toUpperCase())}${e.recurringId ? '<span class="rec">↻</span>' : ''}</span>
+    <span class="tx-main"><div class="tx-title">${esc(e.note || e.category)}</div><div class="tx-meta">${meta}</div></span>
+    <span class="tx-amt num">${money(e.amount)}</span>
+  </button>`;
 }
 
 function renderRecurring() {
@@ -472,7 +503,9 @@ function renderSettings() {
   sel.value = state.settings.currency;
   if (document.activeElement !== $('sBudget')) $('sBudget').value = state.settings.budget || '';
 
-  $('sCats').innerHTML = state.settings.categories.map((c, i) => `<span class="cat-pill"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}<button type="button" data-remove-cat="${i}" aria-label="Remove ${esc(c.name)}">×</button></span>`).join('');
+  $('sCats').innerHTML = state.settings.categories.map((c, i) => `<span class="cat-pill ${c.excluded ? 'excl' : ''}"><button type="button" class="cat-pill-name" data-edit-cat="${i}"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}${c.excluded ? ' <small>not counted</small>' : ''}</button><button type="button" data-remove-cat="${i}" aria-label="Remove ${esc(c.name)}">×</button></span>`).join('');
+  $('backupRemind').checked = state.meta.backupReminders !== false;
+  renderAutoBackup(); renderLock();
 
   const d = daysSince(state.meta.lastBackupAt);
   $('backupInfo').textContent = d === Infinity ? 'No backup made from this phone yet.' : `Last backup: ${new Date(state.meta.lastBackupAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}${d > 0 ? ` (${d} day${d === 1 ? '' : 's'} ago)` : ''}.`;
@@ -712,6 +745,22 @@ $('addCatForm').addEventListener('submit', (e) => {
   $('sNewCat').value = ''; saveSettings();
 });
 $('sCats').addEventListener('click', async (e) => {
+  const ed = e.target.closest('[data-edit-cat]');
+  if (ed) {
+    const cat = state.settings.categories[Number(ed.dataset.editCat)];
+    let counted = !cat.excluded;
+    const { value } = await dialog({
+      title: cat.name,
+      html: `<label class="check"><input type="checkbox" id="dlgCounted" ${counted ? 'checked' : ''}> <span>Count as spending<br><span class="muted small">Turn off for money that isn’t really spent, like transfers between your accounts, investments or savings. It’s still listed, but left out of Spent, budget and charts.</span></span></label>`,
+      actions: [{ label: 'Cancel', value: false }, { label: 'Save', value: true, kind: 'primary' }],
+      onBody: (body) => body.querySelector('#dlgCounted').addEventListener('change', (ev) => (counted = ev.target.checked)),
+    });
+    if (!value || counted === !cat.excluded) return;
+    cat.excluded = !counted;
+    saveSettings();
+    toast(counted ? `${cat.name} now counts as spending` : `${cat.name} no longer counts as spending`);
+    return;
+  }
   const b = e.target.closest('[data-remove-cat]'); if (!b) return;
   if (state.settings.categories.length <= 1) { toast('Keep at least one category'); return; }
   const cat = state.settings.categories[Number(b.dataset.removeCat)];
@@ -856,6 +905,7 @@ $('wipeBtn').addEventListener('click', async () => {
 // ─── Import from SMS ─────────────────────────────────────────────────────────
 const sms = { messages: null, fileName: '', items: [], skipped: null, unread: [], inRange: 0, scanned: false, preset: 'this' };
 const smsCfg = () => state.settings.sms || (state.settings.sms = defaultSmsSettings());
+const smsAnalyzeCfg = () => ({ ...smsCfg(), transferCategory: hasCategory('Transfers') ? 'Transfers' : null });
 
 function setPreset(p) {
   const t = new Date(), today = todayIso();
@@ -924,6 +974,7 @@ function renderSmsResults() {
       if (it.flags.includes('dup')) badges.push('<span class="badge warn">Looks like a duplicate of another SMS</span>');
       if (it.flags.includes('exists')) badges.push(`<span class="badge warn">You may have added this already${it.twin ? ': “' + esc(it.twin) + '”' : ''}</span>`);
       if (it.flags.includes('ignored')) badges.push('<span class="badge">You ignored this before</span>');
+      if (it.flags.includes('person')) badges.push('<span class="badge info">Payment to a person — pick a category and it’s remembered</span>');
       if (it.flags.includes('self')) badges.push('<span class="badge warn">Looks like a transfer to your own account</span>');
       if (it.flags.includes('atm')) badges.push('<span class="badge">ATM cash withdrawal</span>');
       if (it.category !== it.suggested) badges.push('<span class="badge info">Category changed</span>');
@@ -988,7 +1039,7 @@ $('smsScan').addEventListener('click', () => {
   if (!from || !to) { toast('Choose both dates'); return; }
   if (from > to) { toast('“From” is after “To”'); return; }
   const msgs = useNativeSms() ? native.readSms(dayStartMs(from), dayEndMs(to), smsCfg().skipPersonal) : sms.messages;
-  const r = analyzeSms(msgs || [], { from, to, cfg: smsCfg(), existing: state.expenses });
+  const r = analyzeSms(msgs || [], { from, to, cfg: smsAnalyzeCfg(), existing: state.expenses });
   markIgnored(r.items);
   Object.assign(sms, r, { scanned: true, mode: 'manual' });
   renderSmsResults();
@@ -1109,12 +1160,27 @@ async function smsEnableFlow() {
       return false;
     }
   }
-  await setMeta({ smsAuto: true, smsSince: state.meta.smsSince || ymOf(new Date()) + '-01', smsIntroDone: true });
+  await setMeta({ smsAuto: true, smsIntroDone: true });
   state.smsLastState = 'granted';
   renderAll();
   toast('SMS reading is on');
+  if (!state.meta.smsHistoryAsked) await askSmsHistory();
   setTimeout(() => smsStartupCheck(true), 400);
   return true;
+}
+
+/** Ask once how far back to look for payments in old messages. */
+async function askSmsHistory() {
+  const opt = (n, label) => ({ label, value: String(n) });
+  const { value } = await dialog({
+    title: 'Import past payments from SMS?',
+    html: '<p>The app can also look for payments in your older messages, so your history and month-to-month comparisons are complete from day one.</p><p class="muted small">You’ll review everything before it’s added. You can also import any dates later from Settings → Find payments in SMS.</p>',
+    actions: [opt(0, 'This month only'), opt(1, 'Last 2 months'), opt(2, 'Last 3 months', 'primary'), opt(5, 'Last 6 months')].map((a, i) => ({ ...a, kind: i === 2 ? 'primary' : 'ghost' })),
+  });
+  const back = value === null ? 0 : Number(value);
+  const since = shiftMonth(ymOf(new Date()), -back) + '-01';
+  // Never move the start later than an earlier choice.
+  await setMeta({ smsHistoryAsked: true, smsSince: state.meta.smsSince && state.meta.smsSince < since && state.meta.smsHistoryAsked ? state.meta.smsSince : since });
 }
 
 let smsChecking = false;
@@ -1132,9 +1198,10 @@ async function smsStartupCheck(force = false) {
   try {
     if (!state.meta.smsSince) await setMeta({ smsSince: ymOf(new Date()) + '-01' });
     const today = todayIso();
-    const from = [state.meta.smsSince, addDays(today, -90)].sort().pop(); // look back at most 90 days
+    if (!state.meta.smsHistoryAsked) { smsChecking = false; await askSmsHistory(); smsChecking = true; }
+    const from = [state.meta.smsSince, addDays(today, -200)].sort().pop(); // look back at most ~6 months
     const msgs = native.readSms(dayStartMs(from), Date.now(), smsCfg().skipPersonal);
-    const r = analyzeSms(msgs, { from, to: today, cfg: smsCfg(), existing: state.expenses });
+    const r = analyzeSms(msgs, { from, to: today, cfg: smsAnalyzeCfg(), existing: state.expenses });
     const dismissed = state.meta.smsDismissed || {};
     const fresh = r.items.filter((i) => !dismissed[i.key]);
     const wanted = fresh.filter((i) => i.selected);
@@ -1257,10 +1324,180 @@ $('smsDefMethod').addEventListener('change', (e) => { smsCfg().defaultMethod = e
 $('smsIgnore').addEventListener('change', (e) => { smsCfg().ignoreWords = csvList(e.target.value); saveSms(); });
 $('smsSkipSenders').addEventListener('change', (e) => { smsCfg().skipSenders = csvList(e.target.value).map((x) => x.toUpperCase()); saveSms(); });
 
+// ─── Trends screen ────────────────────────────────────────────────────────────
+const trends = createTrends({ state, money, catColor, isExcluded, sum, txHtml: (e) => txHtml(e, true) });
+
+// ─── Automatic backup (Android) ───────────────────────────────────────────────
+const AB_DEFAULT = { on: false, freqDays: 7, keep: 10, lastAt: 0, lastError: null, folder: '' };
+const abState = () => ({ ...AB_DEFAULT, ...(state.meta.autoBackup || {}) });
+function autoBackupHealthy() {
+  const ab = abState();
+  return isNative && ab.on && !ab.lastError && Date.now() - ab.lastAt < (ab.freqDays * 2 + 1) * 86400000;
+}
+/** Back up if due (or always when force). Returns true if a backup was written. */
+async function runAutoBackup(force = false) {
+  if (!isNative || !native.canAutoBackup()) return false;
+  const ab = abState();
+  if (!ab.on) return false;
+  if (!force && Date.now() - ab.lastAt < ab.freqDays * 86400000 - 3600000) return false;
+  if (!state.expenses.length && !state.rules.length) return false;
+  const res = native.writeBackup(`expenses-autobackup_${isoDate(new Date())}.json`, backupText(), ab.keep);
+  const ok = res === 'ok';
+  const next = { ...ab, lastError: ok ? null : String(res || 'error'), lastAt: ok ? Date.now() : ab.lastAt };
+  await setMeta(ok ? { autoBackup: next, lastBackupAt: Date.now() } : { autoBackup: next });
+  if (state.view === 'home') renderBackupNudge();
+  if (state.view === 'settings') renderAutoBackup();
+  return ok;
+}
+function renderAutoBackup() {
+  const box = $('autoBackupBox');
+  box.hidden = !(isNative && native.canAutoBackup());
+  if (box.hidden) return;
+  const ab = abState();
+  const folder = ab.on ? native.backupFolderName() : '';
+  const on = ab.on && !!folder;
+  $('autoBackupLine').innerHTML = !on
+    ? 'Off. Choose a folder and the app saves a backup there automatically. Pick a folder on your phone (for example <b>Documents</b>), or Google Drive if it appears in the list.'
+    : ab.lastError
+      ? `<span class="up">Last attempt failed:</span> ${esc(ab.lastError)}. Choose the folder again.`
+      : `✓ Saving to <b>${esc(folder)}</b> ${ab.freqDays === 1 ? 'every day' : 'every week'}${ab.lastAt ? ` · last ${esc(new Date(ab.lastAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }))}` : ''}.`;
+  $('autoBackupFreqWrap').hidden = !on;
+  $('autoBackupFreq').value = String(ab.freqDays);
+  $('autoBackupKeep').value = String(ab.keep);
+  $('autoBackupPick').textContent = on ? 'Change folder…' : 'Choose folder…';
+  $('autoBackupNow').hidden = !on;
+  $('autoBackupOff').hidden = !on;
+}
+$('autoBackupPick').addEventListener('click', async () => {
+  const name = await native.chooseBackupFolder();
+  if (!name) return;
+  await setMeta({ autoBackup: { ...abState(), on: true, folder: name, lastError: null, lastAt: 0 } });
+  const ok = await runAutoBackup(true);
+  renderAutoBackup();
+  toast(ok ? `Backups will be saved to ${name}` : 'Couldn’t save to that folder. Try another one.');
+});
+$('autoBackupNow').addEventListener('click', async () => toast((await runAutoBackup(true)) ? 'Backup saved' : 'Backup failed — choose the folder again'));
+$('autoBackupOff').addEventListener('click', async () => {
+  native.clearBackupFolder();
+  await setMeta({ autoBackup: { ...abState(), on: false, lastError: null } });
+  renderAutoBackup(); toast('Automatic backup is off');
+});
+$('autoBackupFreq').addEventListener('change', (e) => setMeta({ autoBackup: { ...abState(), freqDays: Number(e.target.value) } }).then(renderAutoBackup));
+$('autoBackupKeep').addEventListener('change', (e) => setMeta({ autoBackup: { ...abState(), keep: Number(e.target.value) } }));
+$('backupRemind').addEventListener('change', (e) => setMeta({ backupReminders: e.target.checked, backupSnoozeUntil: 0 }));
+
+// ─── App lock (Android) ───────────────────────────────────────────────────────
+function renderLock() {
+  const ls = isNative ? native.lockState() : null;
+  $('lockPanel').hidden = !ls;
+  if (!ls) return;
+  $('lockLine').innerHTML = ls.available
+    ? 'Protect your expenses with your fingerprint, face or your phone’s PIN/pattern.'
+    : 'Set up a screen lock (PIN, pattern or fingerprint) in your phone’s settings first. Then you can lock this app.';
+  $('lockToggle').checked = !!ls.enabled;
+  $('lockToggle').disabled = !ls.available && !ls.enabled;
+  $('lockDelayWrap').hidden = !ls.enabled;
+  $('lockDelay').value = String(ls.delay);
+}
+$('lockToggle').addEventListener('change', async (e) => {
+  const want = e.target.checked;
+  const st = await native.setLock(want);
+  renderLock();
+  if (st && !!st.enabled === want) toast(want ? 'App lock is on' : 'App lock is off');
+});
+$('lockDelay').addEventListener('change', (e) => { native.setLockDelay(Number(e.target.value)); toast('Saved'); });
+
+// ─── Sort "Other" ─────────────────────────────────────────────────────────────
+const sortState = { choices: {} };
+function sortGroups() {
+  const groups = new Map();
+  state.expenses.filter((e) => e.category === 'Other' && (e.note || '').trim()).forEach((e) => {
+    const key = merchantKey(e.note) || e.note.trim().toLowerCase();
+    if (!groups.has(key)) groups.set(key, { key, name: e.note.trim(), items: [], total: 0 });
+    const g = groups.get(key); g.items.push(e); g.total += Number(e.amount) || 0;
+  });
+  return [...groups.values()].sort((a, b) => b.total - a.total);
+}
+function renderSort() {
+  const groups = sortGroups();
+  const untitled = state.expenses.filter((e) => e.category === 'Other' && !(e.note || '').trim()).length;
+  if (!groups.length) {
+    $('sortList').innerHTML = `<div class="empty">Nothing to sort — “Other” has no named payments.${untitled ? `<br>${untitled} expense${untitled === 1 ? '' : 's'} without a note can be edited one by one.` : ''}</div>`;
+    $('sortBar').hidden = true; return;
+  }
+  const opts = (sel) => '<option value="">Leave in Other</option>' + state.settings.categories.filter((c) => c.name !== 'Other').map((c) => `<option ${c.name === sel ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  $('sortList').innerHTML = groups.map((g) => `
+    <div class="sort-row">
+      <div class="sort-main"><div class="tx-title">${looksLikePerson(g.name) ? '<span class="person" aria-label="Person">👤</span> ' : ''}${esc(g.name)}</div>
+        <div class="tx-meta">${g.items.length} payment${g.items.length === 1 ? '' : 's'} · ${money(g.total)} · last ${esc(prettyDate(g.items.map((e) => e.date).sort().pop(), { day: 'numeric', month: 'short' }))}</div></div>
+      <select data-key="${esc(g.key)}" aria-label="Category for ${esc(g.name)}">${opts(sortState.choices[g.key])}</select>
+    </div>`).join('')
+    + (untitled ? `<p class="muted small" style="margin:12px 4px 0">${untitled} expense${untitled === 1 ? '' : 's'} without a note aren’t shown — edit those one by one.</p>` : '');
+  updateSortBar(groups);
+}
+function updateSortBar(groups = sortGroups()) {
+  const chosen = groups.filter((g) => sortState.choices[g.key]);
+  const n = chosen.reduce((a, g) => a + g.items.length, 0);
+  $('sortBar').hidden = state.view !== 'sort' || !chosen.length;
+  $('sortSel').innerHTML = `<b>${chosen.length}</b> name${chosen.length === 1 ? '' : 's'} · ${n} expense${n === 1 ? '' : 's'}`;
+  document.body.classList.toggle('has-smsbar', state.view === 'sort' && chosen.length > 0);
+}
+$('sortList').addEventListener('change', (e) => {
+  const k = e.target.dataset.key; if (!k) return;
+  if (e.target.value) sortState.choices[k] = e.target.value; else delete sortState.choices[k];
+  updateSortBar();
+});
+$('sortApply').addEventListener('click', async () => {
+  const groups = sortGroups().filter((g) => sortState.choices[g.key]);
+  if (!groups.length) return;
+  const now = Date.now(), changed = [];
+  const cfg = smsCfg();
+  groups.forEach((g) => {
+    const c = sortState.choices[g.key];
+    g.items.forEach((e) => changed.push({ ...e, category: c, updatedAt: now }));
+    if (g.key.length >= 3) { cfg.rules = cfg.rules.filter((r) => r.k !== g.key); cfg.rules.unshift({ k: g.key, c, mine: true }); }
+  });
+  if (!(await persist({ expenses: changed, meta: { settings: state.settings } }))) return;
+  upsertLocal('expenses', changed);
+  sortState.choices = {};
+  toast(`Moved ${changed.length} expense${changed.length === 1 ? '' : 's'} · ${groups.length} name${groups.length === 1 ? '' : 's'} remembered for future SMS`);
+  renderSort();
+});
+
 // ─── Global events ───────────────────────────────────────────────────────────
 $('prevMonth').addEventListener('click', () => { state.month = shiftMonth(state.month, -1); renderHome(); });
 $('nextMonth').addEventListener('click', () => { state.month = shiftMonth(state.month, 1); renderHome(); });
 $('thisMonth').addEventListener('click', () => { state.month = ymOf(new Date()); renderHome(); });
+$('monthLabel').addEventListener('click', () => openMonthPicker());
+$('dailyPanel').addEventListener('click', () => { trends.open(state.month); location.hash = '#trends'; });
+$('dailyPanel').addEventListener('keydown', (e) => { if (e.key === 'Enter') { trends.open(state.month); location.hash = '#trends'; } });
+
+function openMonthPicker() {
+  let year = Number(state.month.slice(0, 4));
+  const withData = new Set(state.expenses.map((e) => e.date.slice(0, 7)));
+  const cur = ymOf(new Date());
+  const draw = (body, done) => {
+    const months = Array.from({ length: 12 }, (_, i) => `${year}-${pad(i + 1)}`);
+    body.innerHTML = `<div class="mp-year"><button class="icon-btn" data-y="-1" aria-label="Previous year">‹</button><b>${year}</b><button class="icon-btn" data-y="1" aria-label="Next year">›</button></div>
+      <div class="mp-grid">${months.map((ym) => `<button class="mp-m ${ym === state.month ? 'on' : ''} ${ym === cur ? 'now' : ''}" data-ym="${ym}">${esc(monthName(ym, { month: 'short' }))}${withData.has(ym) ? '<i></i>' : ''}</button>`).join('')}</div>`;
+    body.onclick = (e) => {
+      const y = e.target.closest('[data-y]');
+      if (y) { year += Number(y.dataset.y); draw(body, done); return; }
+      const m = e.target.closest('[data-ym]');
+      if (m) { state.month = m.dataset.ym; done(true); renderHome(); }
+    };
+  };
+  dialog({ title: 'Choose month', html: '', actions: [{ label: 'Close', value: null }], onBody: draw });
+}
+
+// Tuck the + button away while scrolling down so it never covers content.
+let lastY = 0;
+window.addEventListener('scroll', () => {
+  const y = window.scrollY;
+  if (Math.abs(y - lastY) < 6) return;
+  $('fab').classList.toggle('tuck', y > lastY && y > 80);
+  lastY = y;
+}, { passive: true });
 $('search').addEventListener('input', (e) => { state.search = e.target.value; renderList(); });
 $('catFilter').addEventListener('change', (e) => { state.filterCat = e.target.value; renderCategories(); renderList(); });
 $('fab').addEventListener('click', () => (state.view === 'recurring' ? openRule(null) : openExpense(null)));
@@ -1279,6 +1516,8 @@ document.addEventListener('click', (ev) => {
     const a = act.dataset.action;
     if (a === 'add') openExpense(null);
     else if (a === 'add-rule') openRule(null);
+    else if (a === 'sort-other') location.hash = '#sort';
+    else if (a === 'snooze-backup') { setMeta({ backupSnoozeUntil: Date.now() + 30 * 86400000 }); renderBackupNudge(); toast('Hidden for 30 days. Turn reminders off in Settings → Backup.'); }
     else if (a === 'clear') { state.filterCat = 'all'; state.search = ''; $('search').value = ''; renderCategories(); renderFilterOptions(); renderList(); }
   }
 });

@@ -2,4 +2,8 @@
 <resources>
     <string name="app_name">Expense Manager</string>
     <string name="share_backup">Save or share backup</string>
+    <string name="unlock_title">Unlock Expense Manager</string>
+    <string name="unlock_subtitle">Use your fingerprint, face or screen lock</string>
+    <string name="locked_title">Expense Manager is locked</string>
+    <string name="unlock_button">Unlock</string>
 </resources>

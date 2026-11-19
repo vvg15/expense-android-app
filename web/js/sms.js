@@ -97,6 +97,23 @@ export function findMerchant(body) {
   return '';
 }
 
+// Words that mean a business, not a person.
+const BUSINESS = /\b(store|stores|mart|shop|foods?|bakery|hotel|restaurant|cafe|medicals?|pharma|enterprises?|traders?|trading|agency|agencies|services?|solutions|pvt|private|ltd|limited|llp|india|bank|company|co|corporation|industries|center|centre|motors?|fuels?|petroleum|textiles|electronics|hospital|clinic|school|college|academy|travels?|tours|systems|technologies|tech|retail|digital|payments?|wallet|recharge|bill|insurance|finance|fintech|kirana|provisions|vegetables?|fruits?|bhel|chicken|mutton|juice|tea|coffee|paint|plywoods?|hardware|works|associates|brothers|bros|sons|&)\b/i;
+
+// Beginnings of business words, for names the bank cut short ("Haritha Vegetab").
+const BUSINESS_STEM = /\b(vegeta|medica|enterpr|provisi|restaura|technolo|solutio|corporat|industr|electron|textil|hardwa|plywoo|petrol|pharma|supermar|hypermar|departm|foodwo|kitche|bakes|sweets|caterer)/i;
+
+/** True if a payee name looks like an individual ("Bharath Pai", "M S Rajan", "9876543210@ybl"). */
+export function looksLikePerson(merchant) {
+  if (!merchant) return false;
+  const m = merchant.trim();
+  if (/\.(com|in|net|org|co)\b/i.test(m) || BUSINESS_STEM.test(m)) return false;
+  if (m.includes('@')) return /^\+?\d{10,}@/.test(m) || /^[a-z]+[._]?[a-z]*\d{0,4}@(ok|ybl|ibl|axl|apl|paytm|upi)/i.test(m) && !BUSINESS.test(m.split('@')[0]);
+  if (BUSINESS.test(m) || /\d/.test(m)) return false;
+  const words = m.split(/\s+/);
+  return words.length >= 1 && words.length <= 4 && words.every((w) => /^[A-Za-z][A-Za-z.']*$/.test(w)) && m.length <= 32;
+}
+
 /** Short key used when learning a rule from the user's correction. */
 export function merchantKey(merchant) {
   if (!merchant) return '';
@@ -234,6 +251,9 @@ export function analyze(messages, { from, to, cfg, existing = [] }) {
     // Same amount arriving in a *different* bank within 30 min → moved between own accounts.
     if (credits.some((c) => c.amount === amount && c.sender !== code && Math.abs(c.ts - msg.ts) <= 30 * 60 * 1000)) {
       item.flags.push('self'); item.selected = false;
+      if (cfg.transferCategory) item.category = item.suggested = cfg.transferCategory;
+    } else if (!atm && item.category === cfg.defaultCategory && looksLikePerson(merchant)) {
+      item.flags.push('person'); // payment to an individual; the user picks a category once
     }
     const twin = byDateAmt.get(date + '|' + amount.toFixed(2));
     if (twin) { item.flags.push('exists'); item.twin = twin.note || twin.category; item.selected = false; }

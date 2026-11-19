@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.1.0 — 19 Nov 2026 · data format v2 (automatic upgrade)
+**Home**
+- Daily spending now comes first; tap it to open the new **Spending trends** screen.
+- Tap the month name to pick any month; "This month" appears only when you're on another month (replaces "Today").
+- The backup reminder has an ✕ (hides it for 30 days) and can be switched off in Settings.
+- The + button tucks away while scrolling down, so it never covers amounts or filters.
+
+**Spending trends** (new screen)
+- Week / month / 3 months / year / custom dates; ‹ › or swipe the summary to move between periods.
+- Group by day, week or month. Chart styles: bars, running total vs budget pace, compare with the previous period.
+- Filter by category and payment method; include or leave out transfers & investments.
+- Tap a bar to list that day's/week's/month's expenses; pinch or +/− to zoom; summary of total, per-day, highest, vs previous, no-spend days.
+
+**Money that isn't spending**
+- New **Transfers** and **Investments** categories, not counted in Spent, budget or charts (shown separately as "Not counted as spending").
+- Any category can be marked "not counted" (Settings → tap a category).
+- SMS detection: SIPs / NACH / brokers / mutual funds → Investments; credit-card bill payments (CRED etc.) and moves between your own accounts → Transfers.
+
+**Payments to people**
+- SMS review marks UPI payments to individuals; pick a category once and it's remembered.
+- New **Sort "Other"** screen (link under By category): groups "Other" expenses by person or shop, one category choice per name updates all past expenses and teaches future SMS.
+
+**Security & backup (Android)**
+- **App lock** with fingerprint, face or the phone's screen lock; lock immediately or after 1/5/30 minutes away. Content is hidden in the recent-apps screen while locked (Android 13+).
+- **Automatic backup** to a folder you choose: daily or weekly, keeping the last 5/10/30 copies. Warns on Home if a backup fails.
+
+**SMS history**
+- When SMS reading is turned on (and once after this update), the app asks how far back to import: this month, 2, 3 or 6 months.
+
+**Under the hood**
+- Data format v2 adds the new categories and keywords to existing data and to old backups automatically (a pre-upgrade copy is kept).
+- The Android app clears cached screens after an update. Bridge v2 (lock, backup folder). New permission: USE_BIOMETRIC (no prompt).
+
 ## 2.0.0 — 18 Nov 2026 · native Android app (data format v1, no migration needed)
 - **Native Android app** (`app/`) wrapping the same screens and logic (`web/`). Targets Android 16, works from Android 7. No internet permission.
 - **Reads SMS directly** (optional READ_SMS permission), after an in-app explanation of what's read, why, and that it stays on the phone. Ask again or use Android settings if refused.

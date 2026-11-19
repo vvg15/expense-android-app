@@ -41,6 +41,10 @@ Play Console → *App content → Sensitive permissions / Permissions declaratio
 
 **Important:** approval is at Google's discretion and can be refused. If it's refused, you can still publish *without* `READ_SMS`: remove that line from `AndroidManifest.xml`. The app then hides direct SMS reading automatically and keeps the "SMS backup file" import.
 
+## Other permissions
+- `USE_BIOMETRIC` (app lock): a normal permission with no declaration needed. Android shows its own fingerprint/screen-lock prompt.
+- No storage permission is used: backups go through Android's file/folder picker.
+
 ## Data safety form
 Based on how the app works (verify against the current form):
 - **Does your app collect or share any of the required user data types?** No data is *collected* (nothing is transmitted off the device) and none is *shared*. Google defines "collect" as transmitting data off the device. On-device-only processing is not collection.

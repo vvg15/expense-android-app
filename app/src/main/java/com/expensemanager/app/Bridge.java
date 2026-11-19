@@ -19,7 +19,7 @@ final class Bridge {
     /** Version of the bridge API (not the app). Bump when adding methods. */
     @JavascriptInterface
     public int bridgeVersion() {
-        return 1;
+        return 2;
     }
 
     @JavascriptInterface
@@ -65,6 +65,43 @@ final class Bridge {
     @JavascriptInterface
     public void checkForUpdate() {
         a.runOnUiThread(() -> a.updater.check(true));
+    }
+
+    // ── v2: app lock ──
+    @JavascriptInterface
+    public String lockState() {
+        return a.lockStateJson();
+    }
+
+    @JavascriptInterface
+    public void setLock(boolean enabled) {
+        a.runOnUiThread(() -> a.setLockEnabled(enabled));
+    }
+
+    @JavascriptInterface
+    public void setLockDelay(int seconds) {
+        a.setLockDelay(seconds);
+    }
+
+    // ── v2: automatic backup to a chosen folder ──
+    @JavascriptInterface
+    public void chooseBackupFolder() {
+        a.runOnUiThread(a::chooseBackupFolder);
+    }
+
+    @JavascriptInterface
+    public String backupFolderName() {
+        return a.backupFolderName();
+    }
+
+    @JavascriptInterface
+    public String writeBackup(String name, String content, int keep) {
+        return a.writeBackup(name, content, keep);
+    }
+
+    @JavascriptInterface
+    public void clearBackupFolder() {
+        a.releaseBackupFolder();
     }
 
     @JavascriptInterface

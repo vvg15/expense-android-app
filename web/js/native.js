@@ -35,4 +35,20 @@ export const native = {
   openSettings: () => has('openAppSettings') && B.openAppSettings(),
   checkUpdate: () => has('checkForUpdate') && B.checkForUpdate(),
   completeUpdate: () => has('completeUpdate') && B.completeUpdate(),
+
+  // ── Automatic backup to a folder the user picks (bridge v2) ──
+  canAutoBackup: () => has('writeBackup'),
+  /** Opens Android's folder picker. Resolves with the folder's name, or '' if cancelled. */
+  async chooseBackupFolder() { const p = once('backupFolder'); B.chooseBackupFolder(); return p; },
+  backupFolderName: () => (has('backupFolderName') ? B.backupFolderName() : ''),
+  /** Writes the file into the folder, keeping the newest `keep` auto-backups. Returns 'ok' or an error text. */
+  writeBackup: (name, text, keep) => (has('writeBackup') ? B.writeBackup(name, text, keep) : 'unavailable'),
+  clearBackupFolder: () => has('clearBackupFolder') && B.clearBackupFolder(),
+
+  // ── App lock (bridge v2) ──
+  /** { available, enabled, delay } — available = the phone has a screen lock set up. */
+  lockState() { try { return has('lockState') ? JSON.parse(B.lockState()) : null; } catch { return null; } },
+  /** Asks for fingerprint/screen lock, then turns the lock on or off. Resolves with the new state. */
+  async setLock(enabled) { const p = once('lockChanged'); B.setLock(!!enabled); return p; },
+  setLockDelay: (sec) => has('setLockDelay') && B.setLockDelay(sec | 0),
 };

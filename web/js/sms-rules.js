@@ -6,6 +6,11 @@
 
 const R = (category, words) => words.map((k) => ({ k, c: category }));
 
+// Not spending: kept out of "Spent" totals (categories marked `excluded`).
+// Frozen copies of these lists are used by the v1→v2 data upgrade in schema.js.
+export const INVESTMENT_WORDS = ['nach', 'mutual fund', 'mutual funds', 'sip', 'zerodha', 'groww', 'upstox', 'kuvera', 'smallcase', 'angel one', 'paytm money', 'et money', 'indian clearing', 'iccl', 'nse clearing', 'bse star', 'mf utilities', 'cams', 'kfintech', 'ppf', 'nps', 'sukanya', 'recurring deposit', 'fixed deposit'];
+export const TRANSFER_WORDS = ['self transfer', 'own account', 'cred', 'cred club', 'credit card bill', 'card bill payment', 'cc bill', 'add money', 'wallet top up', 'wallet load'];
+
 export const DEFAULT_SMS_RULES = [
   ...R('Food & dining', ['foods', 'food', 'bhel', 'coffee', 'tea', 'juice', 'snacks', 'biryani', 'jubilant', 'annapoorna', 'canteen', 'mess', 'dhaba', 'bakes', 'swiggy', 'zomato', 'dominos', 'domino', 'mcdonalds', 'mcdonald', 'kfc', 'pizza hut', 'starbucks', 'burger king', 'subway', 'haldiram', 'eatclub', 'box8', 'faasos', 'barbeque nation', 'chaayos', 'third wave', 'cafe', 'restaurant', 'hotel', 'bakery']),
   ...R('Groceries', ['vegetables', 'vegetable', 'fruits', 'fruit', 'store', 'stores', 'mart', 'hypermarket', 'lulu', 'provisions', 'ration', 'bigbasket', 'blinkit', 'zepto', 'instamart', 'dmart', 'avenue supermarts', 'jiomart', 'more retail', 'reliance fresh', 'reliance smart', 'spencers', 'natures basket', 'grofers', 'milkbasket', 'country delight', 'licious', 'freshtohome', 'supermarket', 'kirana']),
@@ -19,6 +24,8 @@ export const DEFAULT_SMS_RULES = [
   ...R('Education', ['udemy', 'coursera', 'byjus', 'unacademy', 'upgrad', 'school', 'college', 'university', 'tuition', 'academy', 'books', 'kindle']),
   ...R('Personal care', ['salon', 'urban company', 'urbanclap', 'spa', 'naturals', 'lakme', 'barber']),
   ...R('Rent & housing', ['rent', 'nobroker', 'housing.com', 'maintenance', 'society', 'apartment', 'mygate']),
+  ...INVESTMENT_WORDS.map((k) => ({ k, c: 'Investments' })),
+  ...TRANSFER_WORDS.map((k) => ({ k, c: 'Transfers' })),
 ];
 
 export const DEFAULT_IGNORE_WORDS = ['refund', 'cashback', 'reversed', 'reversal'];

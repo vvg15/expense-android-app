@@ -18,13 +18,19 @@
 import { isIsoDate, round2, hash, uid, todayIso } from './util.js';
 import { defaultSmsSettings, normalizeSmsSettings } from './sms-rules.js';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const BACKUP_FORMAT = 'expense-manager-backup';
 
 export const PALETTE = ['#e07a5f', '#3d85c6', '#2a9d8f', '#e9b44c', '#9b5de5', '#ef476f', '#06a77d', '#f4a261', '#577590', '#c08497', '#8d99ae', '#6a994e', '#bc6c25', '#4361ee'];
 export const DEFAULT_METHODS = ['UPI', 'Cash', 'Debit card', 'Credit card', 'Net banking', 'Other'];
-export const DEFAULT_CATEGORIES = ['Food & dining', 'Groceries', 'Transport', 'Rent & housing', 'Bills & utilities', 'Shopping', 'Health', 'Entertainment', 'Travel', 'Education', 'Personal care', 'Subscriptions', 'Other']
-  .map((name, i) => ({ name, color: PALETTE[i % PALETTE.length] }));
+// `excluded: true` = not counted as spending (kept out of Spent, budget and charts).
+export const EXCLUDED_DEFAULTS = [
+  { name: 'Transfers', color: '#7d8597', excluded: true },
+  { name: 'Investments', color: '#2d6a4f', excluded: true },
+];
+export const DEFAULT_CATEGORIES = ['Food & dining', 'Groceries', 'Transport', 'Rent & housing', 'Bills & utilities', 'Shopping', 'Health', 'Entertainment', 'Travel', 'Education', 'Personal care', 'Subscriptions']
+  .map((name, i) => ({ name, color: PALETTE[i % PALETTE.length] }))
+  .concat(EXCLUDED_DEFAULTS, [{ name: 'Other', color: PALETTE[12] }]);
 export const FREQUENCIES = ['daily', 'weekly', 'monthly', 'yearly'];
 
 export function defaultSettings() {
@@ -34,8 +40,28 @@ export function defaultSettings() {
 // ─── Migrations ──────────────────────────────────────────────────────────────
 // MIGRATIONS[n] upgrades data from schema n to n+1.
 const MIGRATIONS = {
-  // Example for the future:
-  // 1: (d) => ({ ...d, expenses: d.expenses.map((e) => ({ ...e, tags: [] })) }),
+  // v1 → v2 (app 2.1.0): "not counted as spending" categories + keywords to detect them.
+  1: (d) => {
+    if (!d.settings || typeof d.settings !== 'object') return d;
+    const s = { ...d.settings };
+    if (Array.isArray(s.categories) && s.categories.length) {
+      const cats = s.categories.slice();
+      const add = (c) => { if (!cats.some((x) => x && x.name === c.name)) cats.push(c); };
+      add({ name: 'Transfers', color: '#7d8597', excluded: true });
+      add({ name: 'Investments', color: '#2d6a4f', excluded: true });
+      s.categories = cats;
+    }
+    if (s.sms && Array.isArray(s.sms.rules)) {
+      const have = new Set(s.sms.rules.map((r) => r && r.k));
+      const v2 = [
+        ...['nach', 'mutual fund', 'mutual funds', 'sip', 'zerodha', 'groww', 'upstox', 'kuvera', 'smallcase', 'angel one', 'paytm money', 'et money', 'indian clearing', 'iccl', 'nse clearing', 'bse star', 'mf utilities', 'cams', 'kfintech', 'ppf', 'nps', 'sukanya', 'recurring deposit', 'fixed deposit'].map((k) => ({ k, c: 'Investments' })),
+        ...['self transfer', 'own account', 'cred', 'cred club', 'credit card bill', 'card bill payment', 'cc bill', 'add money', 'wallet top up', 'wallet load'].map((k) => ({ k, c: 'Transfers' })),
+      ];
+      s.sms = { ...s.sms, rules: s.sms.rules.concat(v2.filter((r) => !have.has(r.k))) };
+    }
+    return { ...d, settings: s };
+  },
+  // Next change: 2: (d) => ({ ...d, ... }),
 };
 
 export function migrate(data, fromVersion) {
@@ -102,7 +128,7 @@ export function normalizeSettings(raw) {
   const d = defaultSettings();
   if (!raw || typeof raw !== 'object') return d;
   const cats = Array.isArray(raw.categories)
-    ? raw.categories.filter((c) => c && str(c.name, 40)).map((c, i) => ({ ...c, name: str(c.name, 40), color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : PALETTE[i % PALETTE.length] }))
+    ? raw.categories.filter((c) => c && str(c.name, 40)).map((c, i) => ({ ...c, name: str(c.name, 40), color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : PALETTE[i % PALETTE.length], excluded: c.excluded === true }))
     : [];
   const methods = Array.isArray(raw.methods) ? raw.methods.map((m) => str(m, 40)).filter(Boolean) : [];
   return {

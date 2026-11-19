@@ -1,6 +1,6 @@
 # Privacy Policy — Expense Manager
 
-_Last updated: 18 November 2026_
+_Last updated: 19 November 2026_
 
 Expense Manager ("the app") is a personal expense tracker for Android. This policy explains what information the app uses and how. In short: **everything stays on your phone.**
 
@@ -21,6 +21,12 @@ How SMS data is handled:
 - Messages from ordinary phone numbers are skipped by default, and OTPs and personal messages are ignored.
 - **No message text is stored.** The app keeps only the expenses you confirm (amount, date, category, payment method, a short note such as the merchant name) and an internal identifier so the same message isn't suggested twice.
 - The permission is **optional**; the rest of the app works without it. You can turn the feature off in the app's Settings, and remove the permission any time in Android Settings → Apps → Expense Manager → Permissions → SMS.
+
+## App lock (optional)
+If you turn on App lock, the app asks Android to verify you with your fingerprint, face or screen lock. Android performs the check. The app never receives or stores your fingerprint, face data, PIN or pattern.
+
+## Automatic backups (optional)
+If you choose a backup folder, the app saves backup files of your expense data into that folder on a schedule you set. The folder is chosen by you, and only that folder is accessed. If it's a cloud folder (e.g. Google Drive), that service's own terms apply to the files stored there.
 
 ## Files you choose
 When you export a backup or spreadsheet, or import a file, the app only reads or writes the file you pick. Where that file goes (your phone, Google Drive, email, and so on) is your choice.

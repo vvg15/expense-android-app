@@ -6,6 +6,9 @@
          "Add expenses from SMS". Used on-device to find bank/UPI/card payment messages. -->
     <uses-permission android:name="android.permission.READ_SMS" />
 
+    <!-- App lock: fingerprint / face / screen lock prompt (normal permission, no user prompt). -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
     <!-- The app works fully offline and never needs the network. Make sure no library
          adds these, so SMS content can't leave the phone through this app. -->
     <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />

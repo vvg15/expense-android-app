@@ -2,6 +2,20 @@ package com.expensemanager.app;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.KeyguardManager;
+import android.hardware.biometrics.BiometricManager;
+import android.hardware.biometrics.BiometricPrompt;
+import android.os.CancellationSignal;
+import android.provider.DocumentsContract;
+import android.view.Gravity;
+import android.widget.Button;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.util.TypedValue;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -57,6 +71,9 @@ public class MainActivity extends Activity {
     static final int REQ_SAVE = 102;
     static final int REQ_OPEN = 103;
     static final int REQ_UPDATE = 104;
+    static final int REQ_FOLDER = 105;
+    static final int REQ_UNLOCK = 106;
+    static final String AUTO_BACKUP_PREFIX = "expenses-autobackup_";
 
     private static final int MAX_SMS = 20000;
 
@@ -66,6 +83,15 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private boolean smsDeclared;
     Updater updater;
+
+    // App lock
+    private View lockOverlay;
+    private boolean locked;
+    private boolean authInProgress;
+    private long backgroundAt;          // when the app was last sent to the background
+    private boolean expectingExternal;  // we opened a picker/share sheet ourselves: don't re-lock on return
+    private Runnable pendingUnlockSuccess;
+    private Runnable pendingUnlockFail;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -84,6 +110,18 @@ public class MainActivity extends Activity {
         setUpSystemBars(root);
         setUpWebView();
         setUpBackHandling();
+
+        lockOverlay = buildLockOverlay(bg);
+        root.addView(lockOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        if (isLockEnabled()) setLocked(true); else lockOverlay.setVisibility(View.GONE);
+        applyRecentsPrivacy();
+
+        // After an app update, drop any cached copies of the old screens (data is not affected).
+        if (prefs.getInt("lastVersionCode", -1) != BuildConfig.VERSION_CODE) {
+            web.clearCache(true);
+            prefs.edit().putInt("lastVersionCode", BuildConfig.VERSION_CODE).apply();
+        }
 
         updater = new Updater(this);
         web.loadUrl(START_URL);
@@ -155,6 +193,7 @@ public class MainActivity extends Activity {
                                              FileChooserParams params) {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
                 fileCallback = callback;
+                expectingExternal = true;
                 Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 i.addCategory(Intent.CATEGORY_OPENABLE);
                 i.setType("*/*");
@@ -191,10 +230,28 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        // Coming back from the background: lock again if it's been long enough.
+        if (isLockEnabled() && !expectingExternal && backgroundAt > 0
+                && System.currentTimeMillis() - backgroundAt >= lockDelaySec() * 1000L) {
+            setLocked(true);
+        }
+        expectingExternal = false;
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         if (web != null) web.onResume();
         if (updater != null) updater.onResume();
+        if (locked && !authInProgress) unlock();
+    }
+
+    @Override
+    protected void onStop() {
+        backgroundAt = System.currentTimeMillis();
+        super.onStop();
     }
 
     @Override
@@ -239,6 +296,7 @@ public class MainActivity extends Activity {
 
     /** Only called after the page has shown its explanation and the user tapped Continue. */
     void requestSmsPermission() {
+        expectingExternal = true;
         prefs.edit().putBoolean("smsAsked", true).apply();
         requestPermissions(new String[]{Manifest.permission.READ_SMS}, REQ_SMS);
     }
@@ -300,6 +358,7 @@ public class MainActivity extends Activity {
     }
 
     void openAppSettings() {
+        expectingExternal = true;
         Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.fromParts("package", getPackageName(), null));
         try {
@@ -311,6 +370,7 @@ public class MainActivity extends Activity {
     // ── Files ──
     /** Lets the user choose where to save (Downloads, Drive, …). Result → "fileSaved" true/false. */
     void saveFile(String name, String mime, String content) {
+        expectingExternal = true;
         pendingSaveContent = content;
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -342,6 +402,7 @@ public class MainActivity extends Activity {
             final Intent chooser = Intent.createChooser(send, getString(R.string.share_backup));
             runOnUiThread(() -> {
                 try {
+                    expectingExternal = true;
                     startActivity(chooser);
                 } catch (ActivityNotFoundException ignored) {
                 }
@@ -379,6 +440,262 @@ public class MainActivity extends Activity {
             emit("fileSaved", ok);
         } else if (requestCode == REQ_UPDATE) {
             if (resultCode != RESULT_OK) emit("updateStatus", "declined");
+        } else if (requestCode == REQ_FOLDER) {
+            String name = "";
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                Uri tree = data.getData();
+                try {
+                    getContentResolver().takePersistableUriPermission(tree,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    releaseBackupFolder();
+                    prefs.edit().putString("backupTree", tree.toString()).apply();
+                    name = backupFolderName();
+                } catch (Exception ignored) {
+                    name = "";
+                }
+            }
+            emit("backupFolder", name);
+        } else if (requestCode == REQ_UNLOCK) {
+            authInProgress = false;
+            Runnable r = resultCode == RESULT_OK ? pendingUnlockSuccess : pendingUnlockFail;
+            pendingUnlockSuccess = null;
+            pendingUnlockFail = null;
+            if (r != null) r.run();
+        }
+    }
+
+    // ── App lock ────────────────────────────────────────────────────────────
+    boolean isLockEnabled() { return prefs.getBoolean("lockEnabled", false); }
+    int lockDelaySec() { return prefs.getInt("lockDelay", 60); }
+
+    boolean deviceSecure() {
+        KeyguardManager km = getSystemService(KeyguardManager.class);
+        return km != null && km.isDeviceSecure();
+    }
+
+    String lockStateJson() {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("available", deviceSecure());
+            o.put("enabled", isLockEnabled());
+            o.put("delay", lockDelaySec());
+            return o.toString();
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    /** Turning the lock on or off always asks for the fingerprint/screen lock first. */
+    void setLockEnabled(boolean enable) {
+        if (enable && !deviceSecure()) {
+            emit("lockChanged", lockStateJsonRaw());
+            return;
+        }
+        authenticate(() -> {
+            prefs.edit().putBoolean("lockEnabled", enable).apply();
+            applyRecentsPrivacy();
+            emit("lockChanged", lockStateJsonRaw());
+        }, () -> emit("lockChanged", lockStateJsonRaw()));
+    }
+
+    void setLockDelay(int sec) {
+        prefs.edit().putInt("lockDelay", Math.max(0, sec)).apply();
+    }
+
+    /** emit() quotes strings; pass the JSON as an object literal instead. */
+    private Object lockStateJsonRaw() {
+        return new Object() {
+            @Override
+            public String toString() { return lockStateJson(); }
+        };
+    }
+
+    private void applyRecentsPrivacy() {
+        // Hide the app's content in the recent-apps screen when the lock is on.
+        if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(!isLockEnabled());
+    }
+
+    private void setLocked(boolean value) {
+        locked = value;
+        if (lockOverlay != null) lockOverlay.setVisibility(value ? View.VISIBLE : View.GONE);
+    }
+
+    private void unlock() {
+        authenticate(() -> setLocked(false), () -> { /* stay locked; the Unlock button retries */ });
+    }
+
+    @SuppressWarnings("deprecation")
+    private void authenticate(Runnable onSuccess, Runnable onFail) {
+        if (authInProgress) return;
+        if (!deviceSecure()) { // screen lock was removed: nothing to check against
+            onSuccess.run();
+            return;
+        }
+        authInProgress = true;
+        String title = getString(R.string.unlock_title);
+        String subtitle = getString(R.string.unlock_subtitle);
+        if (Build.VERSION.SDK_INT >= 28) {
+            BiometricPrompt.Builder b = new BiometricPrompt.Builder(this).setTitle(title).setSubtitle(subtitle);
+            if (Build.VERSION.SDK_INT >= 30) {
+                b.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK
+                        | BiometricManager.Authenticators.DEVICE_CREDENTIAL);
+            } else {
+                b.setDeviceCredentialAllowed(true);
+            }
+            b.build().authenticate(new CancellationSignal(), getMainExecutor(),
+                    new BiometricPrompt.AuthenticationCallback() {
+                        @Override
+                        public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
+                            authInProgress = false;
+                            onSuccess.run();
+                        }
+
+                        @Override
+                        public void onAuthenticationError(int errorCode, CharSequence errString) {
+                            authInProgress = false;
+                            onFail.run();
+                        }
+                    });
+        } else {
+            KeyguardManager km = getSystemService(KeyguardManager.class);
+            Intent i = km == null ? null : km.createConfirmDeviceCredentialIntent(title, subtitle);
+            if (i == null) {
+                authInProgress = false;
+                onSuccess.run();
+                return;
+            }
+            pendingUnlockSuccess = onSuccess;
+            pendingUnlockFail = onFail;
+            expectingExternal = true;
+            startActivityForResult(i, REQ_UNLOCK);
+        }
+    }
+
+    private View buildLockOverlay(int bg) {
+        boolean dark = isDarkMode();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setBackgroundColor(bg);
+        box.setClickable(true); // block touches to the page underneath
+        int pad = dp(32);
+        box.setPadding(pad, pad, pad, pad);
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.mipmap.ic_launcher);
+        box.addView(icon, new LinearLayout.LayoutParams(dp(72), dp(72)));
+
+        TextView title = new TextView(this);
+        title.setText(R.string.locked_title);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        title.setTextColor(dark ? Color.parseColor("#ECEEE8") : Color.parseColor("#1C1D1A"));
+        title.setGravity(Gravity.CENTER);
+        title.setPadding(0, dp(20), 0, dp(20));
+        box.addView(title);
+
+        Button unlock = new Button(this);
+        unlock.setText(R.string.unlock_button);
+        unlock.setOnClickListener(v -> unlock());
+        box.addView(unlock);
+        return box;
+    }
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    // ── Automatic backup folder ─────────────────────────────────────────────
+    void chooseBackupFolder() {
+        expectingExternal = true;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try {
+            startActivityForResult(i, REQ_FOLDER);
+        } catch (ActivityNotFoundException e) {
+            emit("backupFolder", "");
+        }
+    }
+
+    private Uri backupTree() {
+        String t = prefs.getString("backupTree", null);
+        if (t == null) return null;
+        Uri tree = Uri.parse(t);
+        // Still allowed to write there? (The user can revoke it, or the folder can disappear.)
+        for (android.content.UriPermission p : getContentResolver().getPersistedUriPermissions()) {
+            if (p.getUri().equals(tree) && p.isWritePermission()) return tree;
+        }
+        return null;
+    }
+
+    String backupFolderName() {
+        Uri tree = backupTree();
+        if (tree == null) return "";
+        try {
+            Uri doc = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
+            try (Cursor c = getContentResolver().query(doc,
+                    new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null, null, null)) {
+                if (c != null && c.moveToNext() && c.getString(0) != null) return c.getString(0);
+            }
+        } catch (Exception ignored) {
+        }
+        return "Backup folder";
+    }
+
+    void releaseBackupFolder() {
+        String t = prefs.getString("backupTree", null);
+        if (t != null) {
+            try {
+                getContentResolver().releasePersistableUriPermission(Uri.parse(t),
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            } catch (Exception ignored) {
+            }
+            prefs.edit().remove("backupTree").apply();
+        }
+    }
+
+    /** Writes name into the chosen folder (replacing a same-named file), then keeps only the newest `keep` auto-backups. */
+    String writeBackup(String name, String content, int keep) {
+        Uri tree = backupTree();
+        if (tree == null) return "backup folder not available";
+        try {
+            String treeId = DocumentsContract.getTreeDocumentId(tree);
+            Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, treeId);
+            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, treeId);
+            List<String[]> autos = new ArrayList<>(); // {displayName, documentId}
+            try (Cursor c = getContentResolver().query(children, new String[]{
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_DOCUMENT_ID},
+                    null, null, null)) {
+                while (c != null && c.moveToNext()) {
+                    String n = c.getString(0);
+                    if (n != null && n.startsWith(AUTO_BACKUP_PREFIX) && n.endsWith(".json")) autos.add(new String[]{n, c.getString(1)});
+                }
+            }
+            for (String[] a : autos) {
+                if (a[0].equals(name)) DocumentsContract.deleteDocument(getContentResolver(),
+                        DocumentsContract.buildDocumentUriUsingTree(tree, a[1]));
+            }
+            autos.removeIf(a -> a[0].equals(name));
+            Uri doc = DocumentsContract.createDocument(getContentResolver(), parent, "application/json", name);
+            if (doc == null) return "couldn't create the file";
+            try (OutputStream os = getContentResolver().openOutputStream(doc, "wt")) {
+                if (os == null) return "couldn't write the file";
+                os.write(content.getBytes(StandardCharsets.UTF_8));
+            }
+            // Prune: names sort by date (expenses-autobackup_YYYY-MM-DD.json), oldest first.
+            Collections.sort(autos, (x, y) -> x[0].compareTo(y[0]));
+            int excess = autos.size() + 1 - Math.max(1, keep);
+            for (int i = 0; i < excess && i < autos.size(); i++) {
+                try {
+                    DocumentsContract.deleteDocument(getContentResolver(),
+                            DocumentsContract.buildDocumentUriUsingTree(tree, autos.get(i)[1]));
+                } catch (Exception ignored) {
+                }
+            }
+            return "ok";
+        } catch (Exception e) {
+            String m = e.getMessage();
+            return m == null ? "couldn't save the backup" : m;
         }
     }
 }
