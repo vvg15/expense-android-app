@@ -559,3 +559,11 @@ button.month-label:active { background: var(--surface-2); }
 @media (min-width: 861px) {
   .tab-add-slot { display: none; }
 }
+
+/* SMS ↔ recurring (2.3.0) */
+.sms-link { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; margin: 6px 0 0 !important; font-size: 12.5px !important; color: var(--ink-3) !important; }
+.sms-link select { flex: 1; min-width: 0; font-size: 13px; }
+.link-note { margin: 6px 0 0; font-size: 12.5px; line-height: 1.4; color: var(--ink-2); background: var(--accent-soft); border-radius: 10px; padding: 7px 10px; }
+.badge.rec { background: var(--accent-soft); color: var(--accent); }
+.sms-item.linked [data-f=category], .sms-item.linked [data-f=merchant] { display: none; }
+.sms-item.linked .sms-row1 { grid-template-columns: 1fr; }

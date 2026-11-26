@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.0 — 26 Nov 2026
+**SMS ↔ recurring payments**
+- Bank SMS that pay a recurring payment are matched to it automatically: same amount within ±3 days of the due date, or the same shop/person name with an amount within 25% (bills that change) within ±5 days. The review shows "↻ Matches Rent".
+- A matched SMS **updates that month's recurring entry** with the real amount, date and payment method instead of adding a second expense. If the bank takes the money before the due date, the payment is recorded early and won't be added again on the due date.
+- Any SMS can be linked by hand: "Recurring ▾" on each review item.
+- "↻ Make this recurring" on an SMS opens a new recurring payment already filled in (amount, note, category, payment method, start date); that SMS, and other SMS in the review that pay it, are linked straight away.
+- Entries confirmed by SMS show "Recurring · from SMS".
+
 ## 2.2.0 — 19 Nov 2026 · data format v2 (no upgrade needed; new fields are optional)
 **New look**
 - Home: a big "Spent this month" card with a budget ring, days left and how much you can safely spend per day; small cards for daily average, month-end pace and change vs last month.

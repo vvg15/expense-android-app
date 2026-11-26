@@ -3,7 +3,7 @@ import {
   SCHEMA_VERSION, PALETTE, defaultSettings, migrate, normalizeExpense, normalizeRule, normalizeSettings,
   buildBackup, parseImportText, toCSV, netAmount, refundedOf,
 } from './schema.js';
-import { generateDue, nextDue, describe, monthlyEquivalent, occurrences } from './recurring.js';
+import { generateDue, nextDue, describe, monthlyEquivalent, occurrences, matchRecurring, nearestOccurrence, expenseIdFor } from './recurring.js';
 import { parseSmsBackup, analyze as analyzeSms, merchantKey, looksLikePerson, matchRefund } from './sms.js';
 import { createTrends } from './trends.js';
 import { defaultSmsSettings } from './sms-rules.js';
@@ -546,7 +546,7 @@ function dayGroupsHtml(rows, { sticky = false, swipe = true } = {}) {
 
 function txHtml(e, showDate = false, swipe = false) {
   const refunded = refundedOf(e);
-  const meta = [showDate ? esc(prettyDate(e.date, { day: 'numeric', month: 'short', year: e.date.slice(0, 4) === todayIso().slice(0, 4) ? undefined : 'numeric' })) : '', e.note ? esc(e.category) : '', esc(e.method), e.recurringId ? 'Recurring' : '', isExcluded(e.category) ? 'not counted' : ''].filter(Boolean).join(' · ');
+  const meta = [showDate ? esc(prettyDate(e.date, { day: 'numeric', month: 'short', year: e.date.slice(0, 4) === todayIso().slice(0, 4) ? undefined : 'numeric' })) : '', e.note ? esc(e.category) : '', esc(e.method), e.recurringId ? (e.smsKey ? 'Recurring · from SMS' : 'Recurring') : '', isExcluded(e.category) ? 'not counted' : ''].filter(Boolean).join(' · ');
   const right = refunded > 0
     ? `${money(amt(e))}<span class="refund-tag">${amt(e) === 0 ? 'Refunded' : `${money(refunded)} refunded`}</span>`
     : money(e.amount);
@@ -766,7 +766,7 @@ function openExpense(id) {
   $('fRecNote').hidden = !(e && e.recurringId);
   if (e && e.recurringId) {
     $('fRecNote').innerHTML = r
-      ? `↻ Added automatically by “${esc(ruleName(r))}”. Changes here affect only this one. <button type="button" class="linkish" data-edit-rule="${esc(r.id)}">Edit the recurring payment</button>`
+      ? `↻ ${e.smsKey ? `“${esc(ruleName(r))}” payment, with the amount and date from your bank SMS${e.dueDate && e.dueDate !== e.date ? ` (due ${esc(prettyDate(e.dueDate, { day: 'numeric', month: 'short' }))})` : ''}` : `Added automatically by “${esc(ruleName(r))}”`}. Changes here affect only this one. <button type="button" class="linkish" data-edit-rule="${esc(r.id)}">Edit the recurring payment</button>`
       : '↻ Added by a recurring payment that has since been deleted.';
   }
   $('fError').textContent = '';
@@ -968,6 +968,8 @@ function updateRulePreview() {
 
 function openRule(id) {
   const r = id ? ruleById(id) : null;
+  state.ruleFromSms = null;
+  $('rSmsNote').hidden = true;
   state.editingRuleId = r ? r.id : null;
   $('ruleTitle').textContent = r ? 'Edit recurring payment' : 'Add recurring payment';
   $('rAmount').value = r ? r.amount : '';
@@ -1007,9 +1009,22 @@ $('ruleForm').addEventListener('submit', async (ev) => {
   rememberMethod(f.method);
   if (!(await persist({ recurring: [rule] }))) return;
   upsertLocal('rules', [rule]);
+  const fromSms = !existing && state.ruleFromSms;
+  state.ruleFromSms = null;
   closeSheets();
   const added = await runRecurring();
+  if (fromSms) {
+    // Link the SMS it was made from (and any other SMS in this review that pay it).
+    const occ = nearestOccurrence(rule, fromSms.date, state.expenses, 45, takenLinks(fromSms));
+    if (occ) { fromSms.link = { ruleId: rule.id, occ: occ.occ, auto: false }; fromSms.flags = fromSms.flags.filter((x) => x !== 'exists'); fromSms.selected = true; }
+    sms.items.forEach((it) => {
+      if (it.link || it === fromSms) return;
+      const m = matchRecurring(it, [rule], state.expenses, takenLinks(it));
+      if (m) { it.link = { ruleId: rule.id, occ: m.occ, auto: true }; it.flags = it.flags.filter((x) => x !== 'exists'); if (!it.flags.includes('ignored') && !it.flags.includes('dup')) it.selected = true; }
+    });
+  }
   renderAll();
+  if (fromSms) { renderSmsResults(); toast(`Recurring payment saved · linked to ${sms.items.filter((x) => x.link && x.link.ruleId === rule.id).length} SMS`); return; }
   toast(existing ? 'Recurring payment updated' : added ? `Saved · added ${added} payment${added === 1 ? '' : 's'} so far` : 'Recurring payment saved');
 });
 
@@ -1329,6 +1344,42 @@ function catOptions(selected) {
   return names.map((n) => `<option ${n === selected ? 'selected' : ''}>${esc(n)}</option>`).join('');
 }
 
+// ── SMS ↔ recurring payments (2.3.0) ──
+/** Link SMS payments to the recurring entry they pay (rent paid 2 days late, a bill that changed…). */
+function prepareLinks(items) {
+  const taken = new Set();
+  const cands = items.map((it) => ({ it, m: matchRecurring(it, state.rules, state.expenses) })).filter((x) => x.m).sort((a, b) => b.m.score - a.m.score);
+  items.forEach((it) => (it.link = null));
+  for (const { it } of cands) {
+    const m = matchRecurring(it, state.rules, state.expenses, taken);
+    if (!m) continue;
+    taken.add(expenseIdFor(m.ruleId, m.occ));
+    it.link = { ruleId: m.ruleId, occ: m.occ, auto: true };
+    // It's the recurring entry itself, so "you may have added this already" no longer applies.
+    it.flags = it.flags.filter((f) => f !== 'exists');
+    if (!it.flags.includes('ignored') && !it.flags.includes('dup')) it.selected = true;
+  }
+}
+/** Entries already claimed by other items in this review. */
+function takenLinks(except) {
+  return new Set(sms.items.filter((x) => x !== except && x.link).map((x) => expenseIdFor(x.link.ruleId, x.link.occ)));
+}
+function linkOptions(it) {
+  const rules = state.rules.filter((r) => r.active || it.link && it.link.ruleId === r.id);
+  if (!rules.length) return '';
+  return `<option value="">Not a recurring payment</option>` + rules.map((r) => `<option value="${esc(r.id)}" ${it.link && it.link.ruleId === r.id ? 'selected' : ''}>↻ ${esc(ruleName(r))} · ${esc(money(r.amount))}</option>`).join('');
+}
+function linkNote(it) {
+  if (!it.link) return '';
+  const r = ruleById(it.link.ruleId); if (!r) return '';
+  const e = state.expenses.find((x) => x.id === expenseIdFor(r.id, it.link.occ));
+  const due = esc(prettyDate(it.link.occ, { day: 'numeric', month: 'short' }));
+  const what = e
+    ? `Updates the <b>${esc(ruleName(r))}</b> entry due ${due}${Math.abs(Number(e.amount) - it.amount) >= 0.01 ? ` (${esc(money(e.amount))} → <b class="num">${esc(money(it.amount))}</b>)` : ''} with this SMS’s amount, date and payment method — no new expense is added.`
+    : `Records the <b>${esc(ruleName(r))}</b> payment due ${due} with this SMS’s details, so it won’t be added again on the due date.`;
+  return `<p class="link-note">${what}</p>`;
+}
+
 /** Find the expense each refund belongs to (best guess pre-selected). */
 function prepareRefunds(refunds, dismissed = {}) {
   return (refunds || []).map((r) => {
@@ -1367,11 +1418,13 @@ function renderSmsResults() {
       if (it.flags.includes('dup')) badges.push('<span class="badge warn">Looks like a duplicate of another SMS</span>');
       if (it.flags.includes('exists')) badges.push(`<span class="badge warn">You may have added this already${it.twin ? ': “' + esc(it.twin) + '”' : ''}</span>`);
       if (it.flags.includes('ignored')) badges.push('<span class="badge">You ignored this before</span>');
-      if (it.flags.includes('person')) badges.push('<span class="badge info">Payment to a person — pick a category and it’s remembered</span>');
+      if (it.flags.includes('person') && !it.link) badges.push('<span class="badge info">Payment to a person — pick a category and it’s remembered</span>');
       if (it.flags.includes('self')) badges.push('<span class="badge warn">Looks like a transfer to your own account</span>');
       if (it.flags.includes('atm')) badges.push('<span class="badge">ATM cash withdrawal</span>');
-      if (it.category !== it.suggested) badges.push('<span class="badge info">Category changed</span>');
-      return `<div class="sms-item ${it.selected ? '' : 'off'}" data-i="${i}">
+      if (it.category !== it.suggested && !it.link) badges.push('<span class="badge info">Category changed</span>');
+      if (it.link && ruleById(it.link.ruleId)) badges.unshift(`<span class="badge rec">↻ ${it.link.auto ? 'Matches' : 'Linked to'} ${esc(ruleName(ruleById(it.link.ruleId)))}</span>`);
+      const lo = linkOptions(it);
+      return `<div class="sms-item ${it.selected ? '' : 'off'} ${it.link ? 'linked' : ''}" data-i="${i}">
         <input type="checkbox" data-f="selected" ${it.selected ? 'checked' : ''} aria-label="Include this payment">
         <div class="sms-main">
           <div class="sms-row1">
@@ -1384,7 +1437,9 @@ function renderSmsResults() {
             <select data-f="method" aria-label="Paid with">${methodOptions(it.method)}</select>
             <button type="button" class="linkish sms-show" data-show>View SMS</button>
           </div>
-          <div class="sms-meta"><span>From ${esc(it.sender)}${it.acct ? ` · ••${esc(it.acct)}` : ''}</span>${badges.join('')}</div>
+          ${lo ? `<label class="sms-link"><span>Recurring</span><select data-f="link" aria-label="Recurring payment this pays">${lo}</select></label>` : ''}
+          ${linkNote(it)}
+          <div class="sms-meta"><span>From ${esc(it.sender)}${it.acct ? ` · ••${esc(it.acct)}` : ''}</span>${badges.join('')}${it.link ? '' : `<button type="button" class="linkish" data-make-rec>↻ Make this recurring</button>`}</div>
           <pre class="sms-body" hidden>${esc(it.body)}</pre>
         </div>
       </div>`;
@@ -1414,9 +1469,11 @@ function updateSmsBar() {
   document.body.classList.toggle('has-smsbar', on);
   if (!on) return;
   const sel = sms.items.filter((x) => x.selected && x.amount > 0);
+  const nLinked = sel.filter((x) => x.link).length;
   $('smsSel').innerHTML = `<b>${sel.length}</b> of ${sms.items.length} selected · <b class="num">${money(sum(sel))}</b>${refs.length ? ` · ${refs.length} refund${refs.length === 1 ? '' : 's'}` : ''}`;
   const parts = [];
-  if (sel.length) parts.push(`${sel.length} expense${sel.length === 1 ? '' : 's'}`);
+  if (sel.length - nLinked) parts.push(`${sel.length - nLinked} expense${sel.length - nLinked === 1 ? '' : 's'}`);
+  if (nLinked) parts.push(`update ${nLinked} recurring`);
   if (refs.length) parts.push(`${refs.length} refund${refs.length === 1 ? '' : 's'}`);
   $('smsAdd').textContent = parts.length ? `Add ${parts.join(' + ')}` : 'Ignore all';
   $('smsAdd').disabled = false;
@@ -1448,6 +1505,7 @@ $('smsScan').addEventListener('click', () => {
   const msgs = useNativeSms() ? native.readSms(dayStartMs(from), dayEndMs(to), smsCfg().skipPersonal) : sms.messages;
   const r = analyzeSms(msgs || [], { from, to, cfg: smsAnalyzeCfg(), existing: state.expenses });
   markIgnored(r.items);
+  prepareLinks(r.items);
   r.refunds = prepareRefunds(r.refunds, state.meta.smsDismissed || {});
   Object.assign(sms, r, { scanned: true, mode: 'manual' });
   renderSmsResults();
@@ -1459,10 +1517,34 @@ $('smsList').addEventListener('input', (e) => {
   const it = sms.items[Number(row.dataset.i)];
   if (f === 'selected') { it.selected = e.target.checked; row.classList.toggle('off', !it.selected); }
   else if (f === 'amount') it.amount = parseAmount(e.target.value);
+  else if (f === 'link') {
+    const r = e.target.value ? ruleById(e.target.value) : null;
+    const occ = r ? nearestOccurrence(r, it.date, state.expenses, 45, takenLinks(it)) : null;
+    if (r && !occ) { toast(`No ${ruleName(r)} entry near ${prettyDate(it.date)} to link to`); renderSmsResults(); return; }
+    it.link = occ ? { ruleId: r.id, occ: occ.occ, auto: false } : null;
+    if (it.link) { it.flags = it.flags.filter((x) => x !== 'exists'); it.selected = true; }
+    renderSmsResults(); return;
+  }
   else it[f] = e.target.value;
-  if (f === 'category') renderSmsResults(); else updateSmsBar();
+  if (f === 'category') renderSmsResults(); else if (f === 'amount' && it.link) { updateSmsBar(); const n = row.querySelector('.link-note'); if (n) n.outerHTML = linkNote(it); } else updateSmsBar();
 });
 $('smsList').addEventListener('click', (e) => {
+  const mk = e.target.closest('[data-make-rec]');
+  if (mk) {
+    // Turn this payment into a recurring one; the form starts filled in from the SMS.
+    const it = sms.items[Number(mk.closest('[data-i]').dataset.i)];
+    openRule(null);
+    state.ruleFromSms = it;
+    $('rAmount').value = it.amount;
+    $('rNote').value = (it.merchant || '').trim();
+    $('rFreq').value = 'monthly'; $('rInterval').value = 1;
+    $('rStart').value = it.date;
+    $('rMethod').innerHTML = methodOptions(it.method);
+    state.selRuleCat = it.category; $('rCats').innerHTML = chipsHtml(state.selRuleCat);
+    updateRulePreview();
+    $('rSmsNote').hidden = false;
+    return;
+  }
   const b = e.target.closest('[data-show]'); if (!b) return;
   const pre = b.closest('.sms-main').querySelector('.sms-body');
   pre.hidden = !pre.hidden; b.textContent = pre.hidden ? 'View SMS' : 'Hide SMS';
@@ -1492,9 +1574,20 @@ $('smsToggleAll').addEventListener('click', () => {
 });
 
 $('smsAdd').addEventListener('click', async () => {
-  const chosen = sms.items.filter((x) => x.selected && x.amount > 0 && /^\d{4}-\d{2}-\d{2}$/.test(x.date));
+  const picked = sms.items.filter((x) => x.selected && x.amount > 0 && /^\d{4}-\d{2}-\d{2}$/.test(x.date));
+  const linked = picked.filter((x) => x.link && ruleById(x.link.ruleId));
+  const chosen = picked.filter((x) => !linked.includes(x));
   const refs = (sms.refunds || []).filter((r) => r.selected && r.target);
   const now = Date.now();
+  // SMS that pay a recurring payment update that entry (or record it early) instead of adding another.
+  const recUpdates = [], ruleUpdates = new Map();
+  linked.forEach((x) => {
+    const r = ruleUpdates.get(x.link.ruleId) || ruleById(x.link.ruleId);
+    const id = expenseIdFor(r.id, x.link.occ);
+    const base = state.expenses.find((e) => e.id === id) || { id, category: r.category, note: r.note, recurringId: r.id, createdAt: now };
+    recUpdates.push(normalizeExpense({ ...base, amount: x.amount, date: x.date, method: x.method, smsKey: x.key, smsSender: x.sender, source: 'sms', dueDate: x.link.occ, updatedAt: now }));
+    if (!r.lastGenerated || x.link.occ > r.lastGenerated) ruleUpdates.set(r.id, normalizeRule({ ...r, lastGenerated: x.link.occ, updatedAt: now }));
+  });
   const expenses = chosen.map((x) => normalizeExpense({
     id: x.key, amount: x.amount, date: x.date, category: x.category, method: x.method,
     note: (x.merchant || '').trim(), source: 'sms', smsSender: x.sender, createdAt: now, updatedAt: now,
@@ -1521,14 +1614,16 @@ $('smsAdd').addEventListener('click', async () => {
     touched.set(upd.id, upd);
   });
   // Whatever was left unticked is remembered as "ignored", so the app doesn't ask about it again.
-  const added = new Set(chosen.map((x) => x.key).concat(refs.map((r) => r.key)));
+  const added = new Set(picked.map((x) => x.key).concat(refs.map((r) => r.key)));
   const leftOver = sms.items.filter((x) => !added.has(x.key)).concat((sms.refunds || []).filter((r) => !added.has(r.key)));
   const dismissed = pruneDismissed({ ...(state.meta.smsDismissed || {}) });
   leftOver.forEach((x) => (dismissed[x.key] = now));
-  const all = expenses.concat([...touched.values()]);
-  if (!(await persist({ expenses: all, meta: { settings: state.settings, smsDismissed: dismissed } }))) return;
+  const all = expenses.concat(recUpdates, [...touched.values()]);
+  const rulesChanged = [...ruleUpdates.values()];
+  if (!(await persist({ expenses: all, recurring: rulesChanged, meta: { settings: state.settings, smsDismissed: dismissed } }))) return;
   state.meta.smsDismissed = dismissed;
   upsertLocal('expenses', all);
+  if (rulesChanged.length) upsertLocal('rules', rulesChanged);
   addMissingCategories(expenses.map((x) => x.category));
   sms.items = []; sms.refunds = [];
   state.smsPending = null;
@@ -1536,6 +1631,7 @@ $('smsAdd').addEventListener('click', async () => {
   renderSmsResults(); renderSmsCustom();
   const msg = [];
   if (expenses.length) msg.push(`Added ${expenses.length} expense${expenses.length === 1 ? '' : 's'} (${money(sum(expenses))})`);
+  if (recUpdates.length) msg.push(`${recUpdates.length} recurring updated`);
   if (touched.size) msg.push(`${refs.length} refund${refs.length === 1 ? '' : 's'} applied`);
   if (leftOver.length) msg.push(`${leftOver.length} ignored`);
   if (learned) msg.push(`learned ${learned} rule${learned === 1 ? '' : 's'}`);
@@ -1640,6 +1736,7 @@ async function smsStartupCheck(force = false) {
     const r = analyzeSms(msgs, { from, to: today, cfg: smsAnalyzeCfg(), existing: state.expenses });
     const dismissed = state.meta.smsDismissed || {};
     const fresh = r.items.filter((i) => !dismissed[i.key]);
+    prepareLinks(fresh);
     const wanted = fresh.filter((i) => i.selected);
     const refunds = prepareRefunds(r.refunds.filter((x) => !dismissed[x.key]));
     const refundsWanted = refunds.filter((x) => x.selected);

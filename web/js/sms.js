@@ -253,6 +253,7 @@ export function analyze(messages, { from, to, cfg, existing = [] }) {
   const refunds = [];
   const importedIds = new Set(existing.map((e) => e.id));
   existing.forEach((e) => (e.refunds || []).forEach((r) => r.key && importedIds.add(r.key)));
+  existing.forEach((e) => e.smsKey && importedIds.add(e.smsKey)); // SMS that confirmed a recurring entry (2.3.0)
   const byDateAmt = new Map();
   existing.forEach((e) => { if (!String(e.id).startsWith('sms:')) byDateAmt.set(e.date + '|' + Number(e.amount).toFixed(2), e); });
   const skipSenders = cfg.skipSenders.map((s) => s.toUpperCase());
